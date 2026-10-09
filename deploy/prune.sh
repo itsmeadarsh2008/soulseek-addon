@@ -6,41 +6,55 @@
 # origin just refetches from SoulSeek on edge miss. Without edge caching,
 # keep 24-48h so replays don't stall on peer downloads.
 # Env: TTL_HOURS (default 48), MAX_MB (default 4096), DISK_MAX_PCT (default 80),
-# DATA_DIR (volume path), MOUNT (filesystem to watch, default /).
+# DATA_DIR (staging volume path), SHARED_DIR (stable share volume, optional),
+# SHARED_TTL_HOURS (default 720), SHARED_MAX_MB (default 6144),
+# MOUNT (filesystem to watch, default /).
+# Keep TTL_HOURS > SHARE_DELAY_HOURS or the gate never sees a file.
 # Runs hourly via soulseek-prune.timer. Logs to /var/log/soulseek-prune.log.
 D=${DATA_DIR:-/var/lib/docker/volumes/soulseek-addon_downloads/_data}
 MOUNT=${MOUNT:-/}
 TTL_HOURS=${TTL_HOURS:-48}
 MAX_MB=${MAX_MB:-4096}
 DISK_MAX_PCT=${DISK_MAX_PCT:-80}
+SHARED=${SHARED_DIR:-}
+SHARED_TTL_HOURS=${SHARED_TTL_HOURS:-720}
+SHARED_MAX_MB=${SHARED_MAX_MB:-6144}
 [ -d "$D" ] || exit 0
 
-TTL_MIN=$((TTL_HOURS * 60))
-echo "=== $(date -u +%FT%TZ) prune start (du: $(du -sh "$D" | cut -f1), disk: $(df "$MOUNT" | tail -1 | awk '{print $5}'), ttl: ${TTL_HOURS}h, cap: ${MAX_MB}M) ==="
+prune_dir() {
+  dir=$1; ttl_h=$2; cap_mb=$3; label=$4
+  [ -d "$dir" ] || return 0
+  ttl_min=$((ttl_h * 60))
+  echo "--- $label start (du: $(du -sh "$dir" | cut -f1), ttl: ${ttl_h}h, cap: ${cap_mb}M) ---"
+  find "$dir" -type f -amin +"$ttl_min" -mmin +"$ttl_min" -print -delete
+  while [ "$(du -sm "$dir" | cut -f1)" -gt "$cap_mb" ]; do
+    victim=$(find "$dir" -type f -printf '%A@ %p\n' 2>/dev/null | sort -n | head -1 | cut -d' ' -f2-)
+    [ -n "$victim" ] || break
+    echo "evict [$label]: $victim"
+    rm -f "$victim"
+  done
+  find "$dir" -mindepth 1 -type d -empty -delete 2>/dev/null
+  echo "--- $label end (du: $(du -sh "$dir" | cut -f1)) ---"
+}
 
-# 1. TTL on stale files
-find "$D" -type f -amin +"$TTL_MIN" -mmin +"$TTL_MIN" -print -delete
+echo "=== $(date -u +%FT%TZ) prune start (disk: $(df "$MOUNT" | tail -1 | awk '{print $5}')) ==="
+prune_dir "$D" "$TTL_HOURS" "$MAX_MB" staging
+if [ -n "$SHARED" ]; then
+  prune_dir "$SHARED" "$SHARED_TTL_HOURS" "$SHARED_MAX_MB" shared
+fi
 
 evict_oldest() {
-  victim=$(find "$D" -type f -printf '%A@ %p\n' 2>/dev/null | sort -n | head -1 | cut -d' ' -f2-)
+  victim=$(find "$D" ${SHARED:+$SHARED} -type f -printf '%A@ %p\n' 2>/dev/null | sort -n | head -1 | cut -d' ' -f2-)
   [ -n "$victim" ] || return 1
   echo "evict: $victim"
   rm -f "$victim"
 }
 
-# 2. size cap: delete oldest-accessed first while over budget
-while [ "$(du -sm "$D" | cut -f1)" -gt "$MAX_MB" ]; do
-  evict_oldest || break
-done
-
-# 3. disk pressure: once the disk fills past DISK_MAX_PCT, delete local
+# disk pressure: once the disk fills past DISK_MAX_PCT, delete local
 # cache oldest-played-first until back under budget (age ignored).
 while [ "$(df "$MOUNT" | tail -1 | awk '{print $5}' | tr -d '%')" -ge "$DISK_MAX_PCT" ]; do
   echo "disk pressure: $(df "$MOUNT" | tail -1 | awk '{print $5}') used, evicting cache"
   evict_oldest || break
 done
 
-# 4. drop empty album dirs
-find "$D" -mindepth 1 -type d -empty -delete
-
-echo "=== prune end (du: $(du -sh "$D" | cut -f1), disk: $(df "$MOUNT" | tail -1 | awk '{print $5}')) ==="
+echo "=== prune end (disk: $(df "$MOUNT" | tail -1 | awk '{print $5}')) ==="
