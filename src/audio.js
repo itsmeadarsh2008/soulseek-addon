@@ -16,7 +16,7 @@ const EXT_MAP = {
 
 export const AUDIO_EXTS = new Set(Object.keys(EXT_MAP));
 
-export function describeFile(filename, { bitrate, sampleRate, bitDepth } = {}) {
+export function describeFile(filename, { bitrate, sampleRate, bitDepth, size, length } = {}) {
   const dot = filename.lastIndexOf(".");
   const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : "";
   const known = EXT_MAP[ext] ?? { codec: ext.replace(".", "") || "unknown", container: "unknown", format: "unknown", lossless: false };
@@ -24,7 +24,13 @@ export function describeFile(filename, { bitrate, sampleRate, bitDepth } = {}) {
   let bps;
   if (typeof bitrate === "number" && Number.isFinite(bitrate)) {
     bps = bitrate < 1000 ? Math.round(bitrate * 1000) : Math.round(bitrate);
+  } else if (typeof size === "number" && size > 0 && typeof length === "number" && length > 0) {
+    // slskd search responses carry size+length but no bitrate — derive it.
+    bps = Math.round((size * 8) / length);
   }
+  // Strict BitChord tiers: only labels the player itself recognizes can win
+  // quality upgrades. Unknown bitrate stays LOW (conservative, never overclaim).
+  const audioQuality = known.lossless ? "LOSSLESS" : bps >= 256000 ? "HIGH" : "LOW";
   return {
     ext,
     codec: known.codec,
@@ -34,7 +40,7 @@ export function describeFile(filename, { bitrate, sampleRate, bitDepth } = {}) {
     bitrate: bps,
     sampleRate: typeof sampleRate === "number" ? sampleRate : undefined,
     bitDepth: typeof bitDepth === "number" ? bitDepth : undefined,
-    audioQuality: known.lossless ? "LOSSLESS" : bps && bps >= 300_000 ? "HIGH" : bps ? "STANDARD" : "UNKNOWN",
+    audioQuality,
   };
 }
 
@@ -163,10 +169,11 @@ function tokens(s) {
     .filter((w) => w.length > 1);
 }
 
-export function rankTracks(query, tracks) {
+export function rankTracks(query, tracks, quality = "") {
   const q = tokens(query);
   if (!q.length) return tracks;
   const qset = new Set(q);
+  const ql = quality.toLowerCase();
   const scored = tracks.map((t, i) => {
     const tt = tokens(t.title ?? "");
     const at = tokens(t.artist ?? "");
@@ -176,6 +183,16 @@ export function rankTracks(query, tracks) {
     if (q.every((w) => tt.includes(w))) s += 6; // full title coverage
     for (const w of new Set(at)) if (qset.has(w)) s += 2;
     for (const w of new Set(al)) if (qset.has(w)) s += 1;
+    // Requested-tier nudge (kept small so recording match stays primary —
+    // BitChord does its own recording verification on our metadata).
+    const bps = typeof t._bitrate === "number" ? t._bitrate : undefined;
+    if (ql.includes("lossless")) {
+      if (t.audioQuality === "LOSSLESS") s += 3;
+    } else if (ql === "low") {
+      s += t.audioQuality === "LOSSLESS" ? 0 : bps ? Math.max(0, 3 - bps / 150000) : 1;
+    } else {
+      s += t.audioQuality === "LOSSLESS" ? 3 : bps ? Math.min(3, bps / 150000) : 0;
+    }
     return { t, s, i };
   });
   scored.sort((a, b) => b.s - a.s || a.i - b.i); // stable: peer-speed order on ties

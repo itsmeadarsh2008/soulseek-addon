@@ -54,8 +54,10 @@ async function handleSearch(url, res) {
         if (tracks.length >= 8) break;
       }
     }
-    // Exact recording first: BitChord evaluates matches in our order.
-    tracks = rankTracks(q, tracks).slice(0, 20);
+    // Exact recording first, nudged toward the requested tier: BitChord
+    // evaluates recording matches in our order.
+    const want = url.searchParams.get("quality") ?? "";
+    tracks = rankTracks(q, tracks, want).slice(0, 20);
     // Cache hits only (full rows incl. internals for /stream fidelity lookup).
     if (tracks.length > 0) searchCache.set(q.toLowerCase(), { at: Date.now(), tracks });
     // Strip internal (_-prefixed) fields before responding.
@@ -101,6 +103,10 @@ async function handleStream(id, res) {
     const file = await waitForFile(id);
     if (!file) return json(res, 404, { error: "peer unavailable or queued — try next source" });
     const meta = describeFile(file.filename);
+    // Bitrate the player can rank: decoded from file when known, else derived
+    // from the search-reported size+duration (slskd never reports bitrate).
+    const bps = meta.bitrate
+      ?? (meta0?.size && meta0?.duration ? Math.round((meta0.size * 8) / meta0.duration) : undefined);
     const body = {
       url: `${config.PUBLIC_BASE_URL}/media/${encodeURIComponent(id)}`,
       format: meta.format,
@@ -108,12 +114,12 @@ async function handleStream(id, res) {
         ? (meta0?.bitDepth && meta0.bitDepth > 16
           ? `Lossless · Hi-Res ${meta0.bitDepth}-bit${meta0.sampleRate ? ` / ${(meta0.sampleRate / 1000).toFixed(1)} kHz` : ""} (SoulSeek)`
           : "Lossless (SoulSeek)")
-        : meta.bitrate ? `SoulSeek · ~${Math.round(meta.bitrate / 1000)} kbps` : "SoulSeek",
+        : bps ? `SoulSeek · ~${Math.round(bps / 1000)} kbps` : "SoulSeek",
       codec: meta.codec,
       container: meta.container,
       manifest: "none",
       encrypted: false,
-      ...(meta.bitrate ? { bitrate: meta.bitrate } : {}),
+      ...(bps ? { bitrate: bps } : {}),
       ...(meta0?.sampleRate ? { sampleRate: meta0.sampleRate } : {}),
       ...(meta0?.bitDepth ? { bitDepth: meta0.bitDepth } : {}),
     };
@@ -132,6 +138,7 @@ function findCachedMeta(id) {
     if (hit) {
       return {
         size: typeof hit._size === "number" ? hit._size : undefined,
+        duration: typeof hit.duration === "number" ? hit.duration : undefined,
         sampleRate: typeof hit._sampleRate === "number" ? hit._sampleRate : undefined,
         bitDepth: typeof hit._bitDepth === "number" ? hit._bitDepth : undefined,
       };
