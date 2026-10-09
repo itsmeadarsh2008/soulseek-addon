@@ -60,15 +60,21 @@ test("bitrate derived from size+duration, strict tiers", () => {
   assert.equal(describeFile("d.mp3", {}).audioQuality, "LOW");
 });
 
-test("lossless request prefers lossless within same recording", () => {
+test("quality first: hi-res > alac > flac > high > low", () => {
   const tracks = [
-    { id: "a", title: "Song", artist: "X", audioQuality: "HIGH", _bitrate: 320000 },
-    { id: "b", title: "Song", artist: "X", audioQuality: "LOSSLESS" },
+    { id: "mp3", title: "Song", artist: "X", audioQuality: "HIGH", _bitrate: 320000 },
+    { id: "flac", title: "Song", artist: "X", audioQuality: "LOSSLESS", _codec: "flac" },
+    { id: "low", title: "Song", artist: "X", audioQuality: "LOW", _bitrate: 128000 },
+    { id: "alac", title: "Song", artist: "X", audioQuality: "LOSSLESS", _codec: "alac" },
+    { id: "hires", title: "Song", artist: "X", audioQuality: "LOSSLESS", _codec: "flac", _bitDepth: 24 },
   ];
-  assert.equal(rankTracks("Song", tracks, "lossless")[0].id, "b");
-  // ...but recording match still beats tier across recordings
+  const order = rankTracks("Song", tracks).map((t) => t.id);
+  assert.deepEqual(order, ["hires", "alac", "flac", "mp3", "low"]);
+});
+
+test("exact recording still beats quality across recordings", () => {
   const mixed = [
-    { id: "a", title: "Other Song", artist: "X", audioQuality: "LOSSLESS" },
+    { id: "a", title: "Other Song", artist: "X", audioQuality: "LOSSLESS", _codec: "alac" },
     { id: "b", title: "My Song", artist: "X", audioQuality: "LOW", _bitrate: 128000 },
   ];
   assert.equal(rankTracks("My Song", mixed, "lossless")[0].id, "b");

@@ -76,6 +76,7 @@ function toTracks(responses) {
         _filename: filename,
         _size: f.size,
         _bitrate: meta.bitrate,
+        _codec: meta.codec,
         _sampleRate: meta.sampleRate,
         _bitDepth: meta.bitDepth,
         _freeSlot: r.hasFreeUploadSlot === true,
