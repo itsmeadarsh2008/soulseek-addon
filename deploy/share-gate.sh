@@ -7,7 +7,7 @@
 # Env: STAGING_DIR (slskd downloads), SHARED_DIR (slskd shares),
 # SHARE_DELAY_HOURS (default 24). Logs to /var/log/soulseek-prune.log.
 STAGING=${STAGING_DIR:-/var/lib/docker/volumes/soulseek-addon_downloads/_data}
-SHARED=${SHARED_DIR:-/var/lib/docker/volumes/soulseek-addon_shared-data/_data}
+SHARED=${SHARED_DIR:-/var/lib/docker/volumes/soulseek-addon_shared/_data}
 DELAY_HOURS=${SHARE_DELAY_HOURS:-24}
 [ -d "$STAGING" ] || exit 0
 mkdir -p "$SHARED"
