@@ -169,33 +169,46 @@ function tokens(s) {
     .filter((w) => w.length > 1);
 }
 
+// Fidelity rank: hi-res lossless > lossless (ALAC over FLAC at equal depth)
+// > HIGH by bitrate > LOW. ALAC and FLAC are bit-identical at the same depth,
+// so depth still outranks container — ALAC wins ties.
+function qualityRank(t) {
+  const bps = typeof t._bitrate === "number" ? t._bitrate : 0;
+  const codec = (t._codec || "").toLowerCase();
+  if (t.audioQuality === "LOSSLESS") {
+    let r = 4;
+    if (t._bitDepth > 16) r += 1;
+    if (codec === "alac") r += 0.5;
+    return r;
+  }
+  if (t.audioQuality === "HIGH") return 3 + Math.min(0.99, bps / 1e6);
+  return 2 + Math.min(0.99, bps / 1e6);
+}
+
 export function rankTracks(query, tracks, quality = "") {
   const q = tokens(query);
   if (!q.length) return tracks;
   const qset = new Set(q);
-  const ql = quality.toLowerCase();
+  const lowFirst = quality.toLowerCase() === "low";
   const scored = tracks.map((t, i) => {
     const tt = tokens(t.title ?? "");
     const at = tokens(t.artist ?? "");
     const al = tokens(t.album ?? "");
     let s = 0;
     for (const w of new Set(tt)) if (qset.has(w)) s += 2;
-    if (q.every((w) => tt.includes(w))) s += 6; // full title coverage
     for (const w of new Set(at)) if (qset.has(w)) s += 2;
     for (const w of new Set(al)) if (qset.has(w)) s += 1;
-    // Requested-tier nudge (kept small so recording match stays primary —
-    // BitChord does its own recording verification on our metadata).
-    const bps = typeof t._bitrate === "number" ? t._bitrate : undefined;
-    if (ql.includes("lossless")) {
-      if (t.audioQuality === "LOSSLESS") s += 3;
-    } else if (ql === "low") {
-      s += t.audioQuality === "LOSSLESS" ? 0 : bps ? Math.max(0, 3 - bps / 150000) : 1;
-    } else {
-      s += t.audioQuality === "LOSSLESS" ? 3 : bps ? Math.min(3, bps / 150000) : 0;
-    }
-    return { t, s, i };
+    const full = q.every((w) => tt.includes(w));
+    // Order: exact recording, then fidelity (reversed for low requests),
+    // then partial match, then peer speed (stable input order).
+    return { t, full, qr: qualityRank(t), s, i };
   });
-  scored.sort((a, b) => b.s - a.s || a.i - b.i); // stable: peer-speed order on ties
+  scored.sort((a, b) =>
+    (b.full - a.full) ||
+    (lowFirst ? a.qr - b.qr : b.qr - a.qr) ||
+    (b.s - a.s) ||
+    (a.i - b.i)
+  );
   return scored.map((x) => x.t);
 }
 
