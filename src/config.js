@@ -38,6 +38,9 @@ const STREAM_WAIT_MS = Number(process.env.STREAM_WAIT_MS ?? 20000);
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? path.resolve("downloads");
 // Partial downloads live here until complete — served progressively from here too.
 const INCOMPLETE_DIR = process.env.INCOMPLETE_DIR ?? path.resolve(path.dirname(DOWNLOAD_DIR), "incomplete");
+// Stable share dir (quarantine gate promotes aged files here). Served as
+// immutable; empty = disabled.
+const SHARED_DIR = process.env.SHARED_DIR ?? "";
 
 export const config = {
   PORT,
@@ -49,6 +52,7 @@ export const config = {
   STREAM_WAIT_MS,
   DOWNLOAD_DIR,
   INCOMPLETE_DIR,
+  SHARED_DIR,
   ADDON_ID: process.env.ADDON_ID ?? "dev.soulseek.addon",
   ADDON_NAME: process.env.ADDON_NAME ?? "SoulSeek (via slskd)",
   ADDON_VERSION: process.env.ADDON_VERSION ?? "0.1.0",

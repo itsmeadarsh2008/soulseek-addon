@@ -16,6 +16,7 @@ services:
     volumes:
       - slskd-data:/app
       - downloads:/downloads
+      - shared:/shared
     restart: unless-stopped
 
   addon:
@@ -31,10 +32,12 @@ services:
       - SLSKD_URL=http://slskd:5030
       - SLSKD_API_KEY=${SLSKD_API_KEY:-}
       - DOWNLOAD_DIR=/downloads
+      - SHARED_DIR=/shared
     volumes:
       - ./src:/app/src
       - ./package.json:/app/package.json
       - downloads:/downloads
+      - shared:/shared
     depends_on:
       - slskd
     restart: unless-stopped
@@ -42,3 +45,4 @@ services:
 volumes:
   slskd-data:
   downloads:
+  shared:

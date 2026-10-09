@@ -77,3 +77,23 @@ MAX_MB=4096
 ```
 
 Set `TTL_HOURS` in `prune.env`, install the timer from `deploy/`, done.
+
+## Share stopper (quarantine gate)
+
+Fresh downloads are NOT shared immediately. `deploy/share-gate.sh` (same hourly
+timer, runs before prune) moves files from staging (`downloads/`) to the stable
+share dir (`shared/`) only after `SHARE_DELAY_HOURS` (default 24) with no reads
+or writes — and never touches slskd's `incomplete/` area. Playback is unaffected
+(the addon serves staging instantly); only SoulSeek-network sharing is gated.
+
+Setup: `shared:/shared` is already in `docker-compose.yml` (both services).
+Point slskd shares at `/shared` instead of `/downloads`:
+
+```yaml
+shares:
+  directories:
+    - /shared
+```
+
+Keep `TTL_HOURS` > `SHARE_DELAY_HOURS` or files prune before ever being shared.
+The stable dir gets its own retention (`SHARED_TTL_HOURS`, default 720h).
