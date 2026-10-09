@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # soulseek-addon share stopper (quarantine gate).
 # New downloads sit UNSHARED in staging until they've aged past SHARE_DELAY_HOURS
 # with no reads or writes — only then are they moved to the stable share dir
