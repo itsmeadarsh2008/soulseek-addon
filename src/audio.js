@@ -96,14 +96,32 @@ function isGenericDir(name) {
   return !n || n.startsWith("@@") || GENERIC_DIRS.has(n) || /^disc\s*\d+$/.test(n) || /^(cd|dvd)\d*$/i.test(n);
 }
 
+function stripTrackNo(s) {
+  // Leading track numbers only in unambiguous forms, applied until stable:
+  // "02.08 - X", "01-02 X" (compound), "03. X", "1- X" (dash/dot),
+  // "01 X" (leading zero). Bare "22 X" / "7 Years" / "1975" are left intact —
+  // they may be the actual title.
+  let t = s;
+  for (;;) {
+    const n = t
+      .replace(/^\s*\d{1,3}[.-]\d{1,3}\s*[-.]?\s*/, "")
+      .replace(/^\s*\d{1,3}[.-]\s*/, "")
+      .replace(/^\s*0\d\s+/, "");
+    if (n === t) return t;
+    t = n;
+  }
+}
+
 function splitArtistTitle(base) {
   // "Artist - Title" but NOT "01 - Title" (track number, not artist).
   const m = base.match(/^\s*(.+?)\s*-\s*(.+?)\s*$/);
-  if (m && !/^\d{1,3}$/.test(m[1].trim())) {
-    return [m[1].replace(/^\d{1,3}\s*[-.]?\s*/, "").trim() || m[1].trim(), m[2].trim()];
+  if (m) {
+    const artist = stripTrackNo(m[1]).trim();
+    const title = stripTrackNo(m[2]).replace(/^\s*-\s*/, "").trim();
+    if (artist && !/^\d+([.-]\d+)*$/.test(artist)) return [artist, title || m[2].trim()];
   }
-  // Strip leading track number: "01 Title", "03. Title", "1- Title".
-  const t = base.replace(/^\d{1,3}\s*[-.]?\s*/, "").trim();
+  // No usable artist half: title is the base minus any track number.
+  const t = stripTrackNo(base).replace(/^\s*-\s*/, "").trim();
   return [null, t || base.trim()];
 }
 
