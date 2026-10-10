@@ -112,7 +112,7 @@ function stripTrackNo(s) {
   }
 }
 
-function splitArtistTitle(base) {
+export function splitArtistTitle(base) {
   // "Artist - Title" but NOT "01 - Title" (track number, not artist).
   const m = base.match(/^\s*(.+?)\s*-\s*(.+?)\s*$/);
   if (m) {
