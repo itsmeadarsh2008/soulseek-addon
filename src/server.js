@@ -126,16 +126,29 @@ async function handleStream(id, res) {
     }
   }
 
-  // Real mode: ask the peer to send the file, wait for first bytes on disk.
+  // Real mode: race sibling peers for the same recording. BitChord asks for
+  // ONE track; if its peer is queued, trying the next identical recording
+  // inside this request beats a 20s 404 + client retry (the 43s upgrade).
   const t0 = Date.now();
   try {
-    const meta0 = findCachedMeta(id);
-    // Enqueue best-effort: slskd 500s when the file is already downloaded/queued,
-    // in which case we just serve what's on disk below.
-    await enqueueDownload(id, meta0?.size).catch((e) => console.error("enqueue note:", e.message));
-    const file = await waitForFile(id);
-    if (!file) return json(res, 404, { error: "peer unavailable or queued — try next source" });
-    const meta = describeFile(file.filename);
+    const ids = findSiblings(id);
+    await Promise.all(ids.map((cid) => {
+      const m = findCachedMeta(cid);
+      return enqueueDownload(cid, m?.size).catch((e) => {
+        // slskd 500s when already downloaded/queued: serve from disk below.
+        // 429 (throttled) deserves one retry; anything else is a miss.
+        if (/-> 429\b/.test(e.message)) {
+          return new Promise((r) => setTimeout(r, 2500))
+            .then(() => enqueueDownload(cid, m?.size)).catch(() => null);
+        }
+        console.error("enqueue note:", e.message);
+        return null;
+      });
+    }));
+    const won = await waitForFirstComplete(ids);
+    if (!won) return json(res, 404, { error: "peer unavailable or queued — try next source" });
+    const meta0 = findCachedMeta(won.id);
+    const meta = describeFile(won.filename);
     // Bitrate the player can rank: decoded from file when known, else derived
     // from the search-reported size+duration (slskd never reports bitrate).
     const bps = meta.bitrate
@@ -162,11 +175,83 @@ async function handleStream(id, res) {
     // Instant TeraBox archive: mirror completed downloads straight away so
     // the cache tier doesn't wait on the hourly gate. Fire-and-forget —
     // playback already answered. Skips files already under a stable root.
-    if (config.TERABOX_DIR) archiveToTerabox(file.diskPath).catch(() => {});
+    if (config.TERABOX_DIR) archiveToTerabox(won.diskPath).catch(() => {});
   } catch (err) {
     console.error("stream failed:", err.message);
     json(res, 404, { error: "not in this addon" });
   }
+}
+
+// Sibling candidates for one recording: same normalized title, requested id
+// first, capped so one /stream fans out to a few peers instead of one.
+function findSiblings(id) {
+  const norm = (s) => (s ?? "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  for (const { tracks } of searchCache.values()) {
+    const self = tracks.find((t) => t.id === id);
+    if (!self) continue;
+    const key = norm(self.title);
+    const sibs = tracks.filter((t) => norm(t.title) === key);
+    sibs.sort((a, b) => (a.id === id ? -1 : b.id === id ? 1 : 0));
+    return [id, ...sibs.map((t) => t.id).filter((x) => x !== id)].slice(0, 3);
+  }
+  return [id];
+}
+
+// Prefers the COMPLETE file (players choke on truncated audio); falls back
+// to a partial file at timeout so BitChord can at least try the next source.
+// Fast-fails when every candidate sits in a deep peer queue.
+async function waitForFirstComplete(ids) {
+  // Drop undecodable ids up front: junk never becomes downloadable, so fail
+  // fast instead of burning the whole wait window on it.
+  const live = ids.filter((cid) => {
+    try {
+      decodeId(cid);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  if (!live.length) return null;
+  const deadline = Date.now() + config.STREAM_WAIT_MS;
+  let checks = 0;
+  while (Date.now() < deadline) {
+    let deepQueues = 0;
+    let known = 0;
+    for (const cid of live) {
+      let filename;
+      try {
+        filename = decodeId(cid).filename;
+      } catch {
+        continue;
+      }
+      const hit = findOnDisk(filename.split(/[\\/]/).pop());
+      if (hit) {
+        const expected = (await downloadState(cid).catch(() => null))?.size;
+        if (!expected || fs.statSync(hit).size >= expected) {
+          return { id: cid, filename, diskPath: hit };
+        }
+        continue;
+      }
+      const st = await downloadState(cid).catch(() => null);
+      if (!st) continue;
+      known++;
+      const place = st.placeInQueue ?? st.queuePosition ?? st.queueLength ?? 0;
+      if (typeof place === "number" && place > 25) deepQueues++;
+    }
+    // No bytes anywhere after a few checks and every known queue is deep:
+    // minutes of waiting ahead — 404 now so BitChord moves on.
+    if (++checks >= 6 && known > 0 && deepQueues >= known) return null;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  // Last chance: any partial file is better than nothing for progressive players.
+  for (const cid of live) {
+    try {
+      const base = decodeId(cid).filename.split(/[\\/]/).pop();
+      const hit = findOnDisk(base);
+      if (hit) return { id: cid, filename: decodeId(cid).filename, diskPath: hit };
+    } catch { /* ignore */ }
+  }
+  return null;
 }
 
 // Size + fidelity as reported by the search response, if this id came from a cached search.
@@ -199,34 +284,6 @@ async function archiveToTerabox(diskPath) {
   } catch { /* missing -> copy */ }
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
   await fs.promises.copyFile(diskPath, dest);
-}
-
-// Poll the shared download dir until the file appears with content.
-// Prefers the COMPLETE file (players choke on truncated audio); falls back
-// to a partial file at timeout so BitChord can at least try the next source.
-async function waitForFile(id) {
-  const { filename } = decodeId(id);
-  const base = filename.split(/[\\/]/).pop();
-  const deadline = Date.now() + config.STREAM_WAIT_MS;
-  let checks = 0;
-  while (Date.now() < deadline) {
-    const hit = findOnDisk(base);
-    if (hit) {
-      const expected = (await downloadState(id).catch(() => null))?.size;
-      if (!expected || fs.statSync(hit).size >= expected) return { filename, diskPath: hit };
-    } else {
-      const st = await downloadState(id).catch(() => null); // keep slskd polling warm
-      // Fast-fail a hopeless queue: no bytes after a few checks AND peer reports
-      // a deep queue means minutes of waiting — 404 now so BitChord moves on.
-      if (!hit && ++checks >= 6 && st) {
-        const place = st.placeInQueue ?? st.queuePosition ?? st.queueLength ?? 0;
-        if (typeof place === "number" && place > 25) return null;
-      }
-    }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  const hit = findOnDisk(base);
-  return hit ? { filename, diskPath: hit } : null;
 }
 
 function findOnDisk(basename) {
