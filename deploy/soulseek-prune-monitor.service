@@ -1,0 +1,15 @@
+[Unit]
+Description=SoulSeek disk-pressure monitor (event-driven prune)
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/root/soulseek-addon/prune.env
+ExecStart=/root/soulseek-addon/prune-monitor.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/soulseek-prune.log
+StandardError=append:/var/log/soulseek-prune.log
+
+[Install]
+WantedBy=multi-user.target
