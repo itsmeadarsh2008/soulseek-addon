@@ -4,7 +4,6 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { config } from "./config.js";
 import { searchMock, streamMock } from "./mock.js";
 import { decodeId, describeFile, rankTracks, fallbackQueries } from "./audio.js";
@@ -37,24 +36,13 @@ function manifest() {
     checkValidLossless: 0,
     settings: [
       { key: "quality", type: "select", default: "lossless" },
+      // Advertised so BitChord forwards ?token= automatically. Informational:
+      // the path prefix is the real gate; this keeps clients compatible.
       ...(config.ADDON_TOKEN
         ? [{ key: "token", type: "select", default: config.ADDON_TOKEN, options: [{ label: "Default", value: config.ADDON_TOKEN }] }]
         : []),
     ],
   };
-}
-
-// Shared-token gate for /search, /stream and /media. Open when no token is
-// configured. Manifest + health stay public (BitChord needs the manifest to
-// learn the token in the first place).
-export function checkToken(url, res) {
-  if (!config.ADDON_TOKEN) return true;
-  const given = url.searchParams.get("token") ?? "";
-  const a = crypto.createHash("sha256").update(given).digest();
-  const b = crypto.createHash("sha256").update(config.ADDON_TOKEN).digest();
-  if (given && crypto.timingSafeEqual(a, b)) return true;
-  json(res, 401, { error: "addon token required" });
-  return false;
 }
 
 async function handleSearch(url, res) {
@@ -436,16 +424,11 @@ export function createServer() {
       }
     }
     if (req.method === "GET" && route === "/manifest.json") return json(res, 200, manifest());
-    if (req.method === "GET" && route === "/search") {
-      if (!checkToken(url, res)) return undefined;
-      return handleSearch(url, res);
-    }
+    if (req.method === "GET" && route === "/search") return handleSearch(url, res);
     if (req.method === "GET" && route.startsWith("/stream/")) {
-      if (!checkToken(url, res)) return undefined;
       return handleStream(decodeURIComponent(route.slice(8)), res);
     }
     if ((req.method === "GET" || req.method === "HEAD") && route.startsWith("/media/")) {
-      if (!checkToken(url, res)) return undefined;
       return handleMedia(decodeURIComponent(route.slice(7)), req, res);
     }
     if (req.method === "GET" && route === "/health") {
