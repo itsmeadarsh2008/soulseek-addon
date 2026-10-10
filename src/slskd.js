@@ -9,11 +9,13 @@ function headers() {
   return { "Content-Type": "application/json", "X-API-Key": config.SLSKD_API_KEY };
 }
 
-async function api(path, { method = "GET", body } = {}) {
+async function api(path, { method = "GET", body, timeoutMs = 8000 } = {}) {
+  // Every slskd call is bounded: a hung API must never stall a player request.
   const res = await fetch(`${config.SLSKD_URL}${path}`, {
     method,
     headers: headers(),
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`slskd ${method} ${path} -> ${res.status}`);
   const text = (await res.text()).trim();
@@ -22,7 +24,22 @@ async function api(path, { method = "GET", body } = {}) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// In-flight coalescing: concurrent identical searches share one slskd search
+// instead of hammering the network (and tripping its rate limiter).
+const inflightSearches = new Map();
+
 export async function searchSoulseek(query, { timeoutMs = config.SEARCH_TIMEOUT_MS } = {}) {
+  const key = `${query}${timeoutMs}`;
+  const running = inflightSearches.get(key);
+  if (running) return running;
+  const p = runSearch(query, timeoutMs).finally(() => {
+    if (inflightSearches.get(key) === p) inflightSearches.delete(key);
+  });
+  inflightSearches.set(key, p);
+  return p;
+}
+
+async function runSearch(query, timeoutMs) {
   // Official slskd: { searchText, searchTimeout(ms), responseLimit, fileLimit }.
   const search = await api("/api/v0/searches", {
     method: "POST",
