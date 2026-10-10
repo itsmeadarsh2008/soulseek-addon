@@ -22,11 +22,12 @@ flowchart TD
     subgraph Stream["GET /stream/:id"]
         T1[enqueue exact-size download] --> T2{complete?}
         T2 -->|yes| T3[return media URL<br/>+ true codec metadata]
+        T3 --> T5[mirror to TeraBox<br/>fire-and-forget]
         T2 -->|queued / offline| T4[404 → next source]
     end
 
     subgraph Media["GET /media/:id"]
-        M1{on disk?} -->|complete| M2[200 immutable<br/>edge caches 30d]
+        M1{on disk?<br/>downloads › shared › terabox} -->|complete| M2[200 immutable<br/>edge caches 30d]
         M1 -->|partial| M3[206 progressive<br/>no-store]
         M1 -->|missing| M4[404]
     end
@@ -118,12 +119,17 @@ Add `http://localhost:3000/manifest.json` in BitChord: Settings → Sources.
 3. `docker compose up -d` (slskd + addon, shared `downloads/` volume).
 4. Add `https://<your-host>/manifest.json` in BitChord.
 
-## TeraBox as cache (SoulSeek as source, branch `terabox-integration`)
+## TeraBox as cache (SoulSeek as source)
 
-SoulSeek fetches, TeraBox stores, streams come from TeraBox: downloads land on
-local disk, the quarantine gate archives aged files to the TeraBox mount, and
-the addon serves them from there (immutable, edge-cacheable) with zero local
-retention pressure. Needs your TeraBox `ndus` cookie (terabox.com → F12 →
+SoulSeek fetches, TeraBox stores, streams come from TeraBox. Two archive paths:
+
+- **Instant:** the moment `/stream` confirms a complete file, the addon mirrors
+  it to the TeraBox mount in the background (no-clobber, playback unaffected).
+- **Backstop:** the quarantine gate archives anything idle past `SHARE_DELAY_HOURS`.
+
+The addon serves all roots (`downloads/`, `incomplete/`, `shared/`, `terabox/`);
+TeraBox files are complete-by-construction, so they serve immutable and the
+edge caches them. Needs your TeraBox `ndus` cookie (terabox.com → F12 →
 Application → Cookies) — refresh it when streams start failing.
 
 ```bash
@@ -177,8 +183,9 @@ Flow: `BitChord → /search → slskd POST /api/v0/searches {searchText} → pol
 
 Dashboard setup (2 min, Cloudflare free tier):
 
-1. Cache Rule: host = your addon host, path `/soulseek/media/*` (adjust prefix to yours)
-   → Cache Everything, Edge TTL ~1 month
+1. Cache Rule: host = your addon host, path `/media/*` (adjust prefix if you
+   serve under one) → Cache Everything, Edge TTL ~1 month. Set the rule to
+   honor origin TTL so error statuses (`no-store`) are never cached.
 2. Turn on Tiered Cache (Smart) so one PoP's fetch serves all regions
 3. Verify: `curl -I <media-url>` twice → second response has `CF-Cache-Status: HIT`
 
