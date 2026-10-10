@@ -6,15 +6,44 @@ SoulSeek has no HTTP API, so this server is a **gateway**: it logs into SoulSeek
 
 ## How it works
 
-```
-BitChord app
-  │  HTTPS (manifest / search / stream)
-  ▼
-Caddy (TLS, :443) ──► addon :3001 ──► slskd :5030 ──► SoulSeek network
-  │                        │                 │
-  │                        │                 └── distributed search mesh + peer transfers
-  │                        └── serves /media/:id from shared disk (Range + HEAD + MIME)
-  └── Cloudflare edge (caches immutable /media/* for 30d, tiered)
+```mermaid
+flowchart TD
+    BC[BitChord app] -->|HTTPS: manifest / search / stream| Caddy[Caddy TLS :443]
+    Caddy -->|127.0.0.1:3001| Addon[addon :3000]
+    Addon -->|REST :5030| SLSKD[slskd]
+    SLSKD -->|login + distributed mesh| SL[(SoulSeek network)]
+
+    subgraph Search["GET /search?q=…"]
+        S1[slskd distributed search<br/>early exit at 8 usable tracks] --> S2[parse filenames<br/>artist / title / album]
+        S2 --> S3[rank: recording › fidelity › peer speed]
+        S3 --> S4[prefetch top 3 in background]
+    end
+
+    subgraph Stream["GET /stream/:id"]
+        T1[enqueue exact-size download] --> T2{complete?}
+        T2 -->|yes| T3[return media URL<br/>+ true codec metadata]
+        T2 -->|queued / offline| T4[404 → next source]
+    end
+
+    subgraph Media["GET /media/:id"]
+        M1{on disk?} -->|complete| M2[200 immutable<br/>edge caches 30d]
+        M1 -->|partial| M3[206 progressive<br/>no-store]
+        M1 -->|missing| M4[404]
+    end
+
+    Addon --> Search
+    Addon --> Stream
+    Addon --> Media
+    Media -->|bytes| CF[(Cloudflare edge)]
+
+    subgraph Upkeep["hourly"]
+        P1[prune: 12h TTL + 4GB cap<br/>+ 80% disk pressure] --> D[(origin disk)]
+        G1[share-gate: promote<br/>after 6h idle] --> SH[(shared dir → slskd shares)]
+    end
+
+    SLSKD -->|downloads| D
+    D --> Media
+    SH -.->|peers download| SL
 ```
 
 **One play, end to end:**
