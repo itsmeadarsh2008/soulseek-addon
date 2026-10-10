@@ -118,6 +118,20 @@ Add `http://localhost:3000/manifest.json` in BitChord: Settings → Sources.
 3. `docker compose up -d` (slskd + addon, shared `downloads/` volume).
 4. Add `https://<your-host>/manifest.json` in BitChord.
 
+## TeraBox mode (your own shares, via terabox-gateway)
+
+Serves *your* TeraBox library instead of SoulSeek: no queues, no slots, direct
+CDN links, zero local disk. The gateway resolves share URLs; this addon matches
+queries against a local catalog and resolves a **fresh** link per `/stream`
+(links expire — never cached long-term).
+
+1. Run [terabox-gateway](https://github.com/saahiyo/terabox-gateway) (needs your
+   TeraBox `ndus` cookie — see its README; refresh when it expires).
+2. Build the catalog from your music share URLs:
+   `node scripts/build-terabox-catalog.mjs https://teraboxshare.com/s/XXXX ...`
+3. Set `ADDON_BACKEND=terabox`, `TERABOX_GATEWAY_URL=http://<gateway>:5000` in `.env`.
+4. Add `https://<your-host>/manifest.json` in BitChord (shows as `TeraBox Library`).
+
 Flow: `BitChord → /search → slskd POST /api/v0/searches {searchText} → poll responses →
 /stream/:id → slskd download → serve /media/:id (Range-capable)`.
 
