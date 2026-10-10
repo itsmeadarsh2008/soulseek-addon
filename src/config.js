@@ -47,6 +47,10 @@ const INCOMPLETE_DIR = process.env.INCOMPLETE_DIR ?? path.resolve(path.dirname(D
 // Stable share dir (quarantine gate promotes aged files here). Served as
 // immutable; empty = disabled.
 const SHARED_DIR = process.env.SHARED_DIR ?? "";
+// TeraBox cache mount (rclone mount of your TeraBox, see deploy/). Files here
+// are complete by construction (archived after SoulSeek download finishes),
+// so they serve as immutable. Empty = disabled.
+const TERABOX_DIR = process.env.TERABOX_DIR ?? "";
 
 export const config = {
   PORT,
@@ -59,6 +63,7 @@ export const config = {
   DOWNLOAD_DIR,
   INCOMPLETE_DIR,
   SHARED_DIR,
+  TERABOX_DIR,
   BACKEND,
   ADDON_ID: process.env.ADDON_ID ?? "dev.soulseek.addon",
   ADDON_NAME: process.env.ADDON_NAME ?? "SoulSeek (via slskd)",

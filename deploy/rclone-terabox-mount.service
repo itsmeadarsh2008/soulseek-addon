@@ -1,0 +1,23 @@
+[Unit]
+Description=rclone TeraBox mount (soulseek-addon cache tier)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rclone mount terabox:/soulseek /terabox \
+  --config /root/.config/rclone/rclone.conf \
+  --allow-other \
+  --vfs-cache-mode full \
+  --vfs-cache-max-size 2G \
+  --vfs-cache-max-age 24h \
+  --dir-cache-time 5m \
+  --poll-interval 1m \
+  --log-level NOTICE
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/rclone-terabox.log
+StandardError=append:/var/log/rclone-terabox.log
+
+[Install]
+WantedBy=multi-user.target
