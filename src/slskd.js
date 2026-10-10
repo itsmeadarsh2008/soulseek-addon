@@ -3,7 +3,26 @@
 // Version differences are isolated in enqueueDownload() — see notes there.
 
 import { config } from "./config.js";
-import { AUDIO_EXTS, decodeId, describeFile, encodeId, parseSoulseekMetadata, rankTracks, fallbackQueries } from "./audio.js";
+import { AUDIO_EXTS, decodeId, describeFile, encodeId, parseSoulseekMetadata, splitArtistTitle } from "./audio.js";
+
+// Peer-reported tags are often junk (years, track numbers, unsplit
+// "X - Y" blobs in the title field). Sanitize before trusting.
+function saneArtist(a) {
+  const s = (a ?? "").trim();
+  return s.length >= 2 && !/^\d+([.-]\d+)*$/.test(s) ? s : null;
+}
+
+function saneTitle(t, parsed) {
+  let s = (t ?? "").trim();
+  if (!s) return parsed.title;
+  // Unsplit "Artist - Title" sitting in the title field: re-split it.
+  const [a, rest] = splitArtistTitle(s);
+  if (a && rest && rest !== s) {
+    // Keep the split only if the left half looks like an artist.
+    if (saneArtist(a)) return rest;
+  }
+  return s;
+}
 
 function headers() {
   return { "Content-Type": "application/json", "X-API-Key": config.SLSKD_API_KEY };
@@ -86,9 +105,9 @@ function toTracks(responses) {
       const parsed = parseSoulseekMetadata(filename);
       out.push({
         id: encodeId(username, filename),
-        title: f.title ?? parsed.title,
-        artist: f.artist ?? parsed.artist,
-        album: f.album ?? parsed.album,
+        title: saneTitle(f.title, parsed),
+        artist: saneArtist(f.artist) ?? parsed.artist,
+        album: (f.album ?? "").trim() || parsed.album,
         duration: typeof f.length === "number" ? f.length : undefined,
         format: meta.format,
         audioQuality: meta.audioQuality,

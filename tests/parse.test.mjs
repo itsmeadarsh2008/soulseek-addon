@@ -27,6 +27,13 @@ test("plain Artist - Title", () => {
   assert.equal(m.title, "Naal Nachna");
 });
 
+test("splitArtistTitle is exported for re-splitting peer tags", async () => {
+  const { splitArtistTitle } = await import("../src/audio.js");
+  const [a, t] = splitArtistTitle("「僕は...」 - I am");
+  assert.equal(a, "「僕は...」");
+  assert.equal(t, "I am");
+});
+
 test("quality tags stripped, identity kept", () => {
   const m = parseSoulseekMetadata("Artist - Song [FLAC 24-bit].flac");
   assert.equal(m.title, "Song");
