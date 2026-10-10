@@ -89,6 +89,13 @@ kick each other off, so give every deployment its own SoulSeek account.
 peer queued/offline → `404`; slskd throttled → `429 + Retry-After` (BitChord
 backs off); empty search → `200 []` (soft miss). Nothing ever 500s on P2P flakiness.
 
+**Access control (optional):** set `ADDON_TOKEN` and `/search`, `/stream`,
+`/media` require `?token=` (timing-safe compare; manifest/health stay public).
+The token ships as the manifest's `token` default, which BitChord forwards
+automatically — zero user action. Honest scope: this stops scanners and
+drive-by use, not someone holding your manifest URL (they hold the key too).
+True revocation = rotate the token *and/or* the manifest path.
+
 **Typical timing:** search 3–5s warm (distributed physics + early exit), stream
 ~2s warm / ~10s cold first fetch, media bytes edge-fast (`HIT`) after first play.
 
