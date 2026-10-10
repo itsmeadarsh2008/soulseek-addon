@@ -118,6 +118,29 @@ Add `http://localhost:3000/manifest.json` in BitChord: Settings → Sources.
 3. `docker compose up -d` (slskd + addon, shared `downloads/` volume).
 4. Add `https://<your-host>/manifest.json` in BitChord.
 
+## TeraBox as cache (SoulSeek as source, branch `terabox-integration`)
+
+SoulSeek fetches, TeraBox stores, streams come from TeraBox: downloads land on
+local disk, the quarantine gate archives aged files to the TeraBox mount, and
+the addon serves them from there (immutable, edge-cacheable) with zero local
+retention pressure. Needs your TeraBox `ndus` cookie (terabox.com → F12 →
+Application → Cookies) — refresh it when streams start failing.
+
+```bash
+# 1. on the host: install rclone fork + configure remote
+NDUS='<your ndus cookie>' ./deploy/terabox-setup.sh
+cp deploy/rclone-terabox-mount.service /etc/systemd/system/
+systemctl enable --now rclone-terabox-mount   # mounts at /terabox
+
+# 2. point the gate + addon at it
+# prune.env:  SHARED_DIR=/terabox/soulseek   (gate destination)
+# .env:       TERABOX_DIR=/terabox           (serve root)
+```
+
+Caveats: free-account uploads run ~1.5–3MB/s per file (a 50MB FLAC takes
+~30s, async in background — playback never waits); the FUSE mount is a single
+point of failure (systemd restarts it, monitor `/var/log/rclone-terabox.log`).
+
 ## TeraBox mode (your own shares, via terabox-gateway)
 
 Serves *your* TeraBox library instead of SoulSeek: no queues, no slots, direct

@@ -212,6 +212,7 @@ async function waitForFile(id) {
 function findOnDisk(basename) {
   const roots = [config.DOWNLOAD_DIR, config.INCOMPLETE_DIR];
   if (config.SHARED_DIR) roots.push(config.SHARED_DIR);
+  if (config.TERABOX_DIR) roots.push(config.TERABOX_DIR);
   for (const root of roots) {
     const hit = walk(root, basename);
     if (hit) return hit;
