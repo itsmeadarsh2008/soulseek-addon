@@ -1,7 +1,7 @@
 [Unit]
 Description=SoulSeek origin cache prune (TTL + caps + disk pressure)
 [Timer]
-OnCalendar=hourly
+OnCalendar=*:00/30
 Persistent=true
 [Install]
 WantedBy=timers.target
