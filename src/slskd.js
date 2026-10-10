@@ -109,6 +109,16 @@ async function runSearch(query, timeoutMs) {
     if (done) break;
     await sleep(1200);
   }
+  // Slow-DB guard: on a loaded box slskd marks the search complete before its
+  // /responses payload is readable — an empty read with a nonzero fileCount
+  // means "not yet", not "nothing". Re-read briefly before giving up.
+  if (!responses.length) {
+    for (let i = 0; i < 3; i++) {
+      await sleep(1000);
+      responses = (await api(`/api/v0/searches/${encodeURIComponent(id)}/responses`, { label: "responses retry" }).catch(() => [])) ?? [];
+      if (responses.length) break;
+    }
+  }
   // Best-effort cleanup; ignore failures (old searches expire server-side).
   api(`/api/v0/searches/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
 
