@@ -33,6 +33,9 @@ services:
       - SLSKD_API_KEY=${SLSKD_API_KEY:-}
       - DOWNLOAD_DIR=/downloads
       - SHARED_DIR=/shared
+      # TERABOX_DIR: set + bind-mount the rclone mount (see README).
+      # Left unset here so plain `docker compose up` works without a mount.
+      - TERABOX_DIR=${TERABOX_DIR:-}
     volumes:
       - ./src:/app/src
       - ./package.json:/app/package.json
