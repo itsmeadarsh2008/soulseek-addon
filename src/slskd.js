@@ -3,17 +3,17 @@
 // Version differences are isolated in enqueueDownload() — see notes there.
 
 import { config } from "./config.js";
-import { AUDIO_EXTS, decodeId, describeFile, encodeId, parseSoulseekMetadata, splitArtistTitle } from "./audio.js";
+import { AUDIO_EXTS, decodeId, describeFile, encodeId, parseSoulseekMetadata, splitArtistTitle, cleanToken } from "./audio.js";
 
 // Peer-reported tags are often junk (years, track numbers, unsplit
 // "X - Y" blobs in the title field). Sanitize before trusting.
 function saneArtist(a) {
-  const s = (a ?? "").trim();
+  const s = cleanToken((a ?? "").trim());
   return s.length >= 2 && !/^\d+([.-]\d+)*$/.test(s) ? s : null;
 }
 
 function saneTitle(t, parsed) {
-  let s = (t ?? "").trim();
+  let s = cleanToken((t ?? "").trim());
   if (!s) return parsed.title;
   // Unsplit "Artist - Title" sitting in the title field: re-split it.
   const [a, rest] = splitArtistTitle(s);
@@ -112,7 +112,10 @@ async function runSearch(query, timeoutMs) {
   // Best-effort cleanup; ignore failures (old searches expire server-side).
   api(`/api/v0/searches/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
 
-  return toTracks(responses).slice(0, 20);
+  // No slicing here: the caller ranks by query first (rankTracks) and slices
+  // after. Slicing by peer speed here would drop slow-peer exact matches
+  // (e.g. RADWIMPS) before ranking ever sees them.
+  return toTracks(responses);
 }
 
 function toTracks(responses) {
@@ -130,7 +133,7 @@ function toTracks(responses) {
         id: encodeId(username, filename),
         title: saneTitle(f.title, parsed),
         artist: saneArtist(f.artist) ?? parsed.artist,
-        album: (f.album ?? "").trim() || parsed.album,
+        album: cleanToken((f.album ?? "").trim()) || parsed.album,
         duration: typeof f.length === "number" ? f.length : undefined,
         format: meta.format,
         audioQuality: meta.audioQuality,

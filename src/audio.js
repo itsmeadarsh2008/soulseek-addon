@@ -72,8 +72,10 @@ const GENERIC_DIRS = new Set([
 ]);
 const QUALITY_TOKENS = /^(flac|mp3|m4a|aac|ogg|oga|opus|wav|aiff|alac|wma|320|256|192|128|v0|vinyl|web|cd|single|album|ep|lossless|hi-?res|24bit|24-96|16bit|320kbps|128kbps|cbr|vbr)$/i;
 
-function cleanToken(s) {
+export function cleanToken(s) {
   return s
+    .replace(/_/g, " ") // benny_bridges-the_grand_escape -> spaced words
+    .replace(/\s{2,}/g, " ")
     .replace(/^\[[\d.\s\-_]+\]\s*/, "") // leading "[2023.05.31]" dates
     .replace(/\s*\(\d{4}\)\s*$/, "") // trailing "(2025)" year
     .replace(/\s*\[[\d.\s\-_]+\]\s*$/, "") // trailing "[2021]" year
