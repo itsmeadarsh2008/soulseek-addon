@@ -28,17 +28,24 @@ function headers() {
   return { "Content-Type": "application/json", "X-API-Key": config.SLSKD_API_KEY };
 }
 
-async function api(path, { method = "GET", body, timeoutMs = 8000 } = {}) {
+async function api(path, { method = "GET", body, timeoutMs = 8000, label } = {}) {
   // Every slskd call is bounded: a hung API must never stall a player request.
-  const res = await fetch(`${config.SLSKD_URL}${path}`, {
-    method,
-    headers: headers(),
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) throw new Error(`slskd ${method} ${path} -> ${res.status}`);
-  const text = (await res.text()).trim();
-  return text ? JSON.parse(text) : null;
+  try {
+    const res = await fetch(`${config.SLSKD_URL}${path}`, {
+      method,
+      headers: headers(),
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) throw new Error(`slskd ${method} ${path} -> ${res.status}`);
+    const text = (await res.text()).trim();
+    return text ? JSON.parse(text) : null;
+  } catch (err) {
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      throw new Error(`slskd timeout after ${timeoutMs}ms (${label ?? `${method} ${path}`})`);
+    }
+    throw err;
+  }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -60,15 +67,31 @@ export async function searchSoulseek(query, { timeoutMs = config.SEARCH_TIMEOUT_
 
 async function runSearch(query, timeoutMs) {
   // Official slskd: { searchText, searchTimeout(ms), responseLimit, fileLimit }.
-  const search = await api("/api/v0/searches", {
-    method: "POST",
-    body: {
-      searchText: query,
-      searchTimeout: timeoutMs,
-      responseLimit: 25,
-      fileLimit: 200,
-    },
-  });
+  // The initial POST gets a generous timeout + one retry: under burst load
+  // slskd is slow to ACCEPT searches, and a fast abort here becomes a miss
+  // that BitChord can never upgrade from.
+  let search = null;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      search = await api("/api/v0/searches", {
+        method: "POST",
+        timeoutMs: 20000,
+        label: `POST /searches attempt ${attempt + 1}`,
+        body: {
+          searchText: query,
+          searchTimeout: timeoutMs,
+          responseLimit: 25,
+          fileLimit: 200,
+        },
+      });
+      break;
+    } catch (err) {
+      lastErr = err;
+      await sleep(1500);
+    }
+  }
+  if (!search) throw lastErr ?? new Error("slskd did not return a search id");
   const id = search?.id ?? search?.search?.id;
   if (!id) throw new Error("slskd did not return a search id");
 
@@ -78,13 +101,13 @@ async function runSearch(query, timeoutMs) {
   const deadline = Date.now() + timeoutMs + 2000;
   let responses = [];
   while (Date.now() < deadline) {
-    const state = await api(`/api/v0/searches/${encodeURIComponent(id)}`).catch(() => null);
-    responses = (await api(`/api/v0/searches/${encodeURIComponent(id)}/responses`).catch(() => [])) ?? [];
+    const state = await api(`/api/v0/searches/${encodeURIComponent(id)}`, { label: "poll state" }).catch(() => null);
+    responses = (await api(`/api/v0/searches/${encodeURIComponent(id)}/responses`, { label: "poll responses" }).catch(() => [])) ?? [];
     const done = /completed|timedout|done/i.test(String(state?.state ?? ""));
     if (responses.length > 0 && toTracks(responses).length >= 8) break;
     if (done && responses.length > 0) break;
     if (done) break;
-    await sleep(750);
+    await sleep(1200);
   }
   // Best-effort cleanup; ignore failures (old searches expire server-side).
   api(`/api/v0/searches/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});

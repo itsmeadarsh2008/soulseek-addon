@@ -13,6 +13,9 @@ const searchCache = new Map(); // q -> { at, tracks } (BitChord caches ~10 min)
 const streamCache = new Map(); // id -> { at, body } (BitChord caches ~5 min)
 const SEARCH_TTL = 10 * 60 * 1000;
 const STREAM_TTL = 5 * 60 * 1000;
+// Prefetch circuit breaker: after any search failure, stop adding enqueue
+// load for 60s so a struggling slskd can recover instead of spiraling.
+let prefetchCooldownUntil = 0;
 
 const json = (res, status, value) => {
   const body = JSON.stringify(value);
@@ -67,7 +70,8 @@ async function handleSearch(url, res) {
     console.error(`search ok: q=${JSON.stringify(q)} n=${tracks.length} ms=${Date.now() - t0}`);
     // Prefetch: BitChord usually plays one of the top hits next. Start those
     // downloads NOW in the background so /stream resolves in seconds.
-    if (!config.MOCK_MODE) {
+    // Skipped during the post-failure cooldown (see above).
+    if (!config.MOCK_MODE && Date.now() >= prefetchCooldownUntil) {
       const PREFETCH_N = Number(process.env.PREFETCH_N ?? 3);
       for (const t of tracks.slice(0, PREFETCH_N)) {
         enqueueDownload(t.id, t._size).catch(() => {});
@@ -75,6 +79,7 @@ async function handleSearch(url, res) {
     }
   } catch (err) {
     console.error("search failed:", err.message);
+    prefetchCooldownUntil = Date.now() + 60000;
     // Pass through rate-limiting so BitChord backs off instead of caching a miss.
     if (/-> 429\b/.test(err.message)) {
       res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "60" });
