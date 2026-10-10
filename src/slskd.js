@@ -54,12 +54,15 @@ async function runSearch(query, timeoutMs) {
   if (!id) throw new Error("slskd did not return a search id");
 
   // Distributed search: poll until it completes or our timeout elapses.
+  // Early exit: usable answers usually arrive in 2-4s; no point waiting the
+  // full window once we have enough to rank (8 tracks).
   const deadline = Date.now() + timeoutMs + 2000;
   let responses = [];
   while (Date.now() < deadline) {
     const state = await api(`/api/v0/searches/${encodeURIComponent(id)}`).catch(() => null);
     responses = (await api(`/api/v0/searches/${encodeURIComponent(id)}/responses`).catch(() => [])) ?? [];
     const done = /completed|timedout|done/i.test(String(state?.state ?? ""));
+    if (responses.length > 0 && toTracks(responses).length >= 8) break;
     if (done && responses.length > 0) break;
     if (done) break;
     await sleep(750);
