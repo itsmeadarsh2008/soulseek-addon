@@ -34,6 +34,14 @@ const BACKEND = process.env.ADDON_BACKEND
   ?? (process.env.TERABOX_GATEWAY_URL ? "terabox"
     : MOCK_MODE ? "mock" : "soulseek");
 
+// Optional shared token: when set, /search, /stream and /media require
+// ?token= to match (timing-safe compare). The same value is advertised as
+// the manifest's `token` default, which BitChord forwards automatically.
+// Honest scope: anyone holding the manifest URL holds the key — this stops
+// scanners and drive-by use, not someone you shared the URL with. True
+// revocation = rotating the token AND/OR the manifest path.
+const ADDON_TOKEN = process.env.ADDON_TOKEN ?? "";
+
 // How long to collect distributed SoulSeek search responses before answering.
 const SEARCH_TIMEOUT_MS = Number(process.env.SEARCH_TIMEOUT_MS ?? 8000);
 // How long /stream waits for the download's first bytes before giving up (404 -> next source).
@@ -65,6 +73,7 @@ export const config = {
   SHARED_DIR,
   TERABOX_DIR,
   BACKEND,
+  ADDON_TOKEN,
   ADDON_ID: process.env.ADDON_ID ?? "dev.soulseek.addon",
   ADDON_NAME: process.env.ADDON_NAME ?? "SoulSeek (via slskd)",
   ADDON_VERSION: process.env.ADDON_VERSION ?? "0.1.0",
