@@ -159,6 +159,10 @@ async function handleStream(id, res) {
     streamCache.set(id, { at: Date.now(), body });
     console.error(`stream ok: ms=${Date.now() - t0}`);
     json(res, 200, body);
+    // Instant TeraBox archive: mirror completed downloads straight away so
+    // the cache tier doesn't wait on the hourly gate. Fire-and-forget —
+    // playback already answered. Skips files already under a stable root.
+    if (config.TERABOX_DIR) archiveToTerabox(file.diskPath).catch(() => {});
   } catch (err) {
     console.error("stream failed:", err.message);
     json(res, 404, { error: "not in this addon" });
@@ -179,6 +183,22 @@ function findCachedMeta(id) {
     }
   }
   return {};
+}
+
+// Mirror a completed download into the TeraBox cache mount (if configured).
+// Only files directly under DOWNLOAD_DIR qualify: partials (incomplete/) and
+// already-stable files (shared/, terabox/) are left alone. No-clobber: a file
+// already archived is never re-uploaded.
+async function archiveToTerabox(diskPath) {
+  const rel = path.relative(config.DOWNLOAD_DIR, diskPath);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return;
+  const dest = path.join(config.TERABOX_DIR, "soulseek", rel);
+  try {
+    await fs.promises.stat(dest);
+    return; // already archived
+  } catch { /* missing -> copy */ }
+  await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+  await fs.promises.copyFile(diskPath, dest);
 }
 
 // Poll the shared download dir until the file appears with content.
