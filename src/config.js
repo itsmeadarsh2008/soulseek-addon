@@ -34,12 +34,13 @@ const BACKEND = process.env.ADDON_BACKEND
   ?? (process.env.TERABOX_GATEWAY_URL ? "terabox"
     : MOCK_MODE ? "mock" : "soulseek");
 
-// Optional shared token: when set, /search, /stream and /media require
-// ?token= to match (timing-safe compare). The same value is advertised as
+// Optional shared token: when set, EVERY addon route (manifest included)
+// lives under /<token>/... — bare paths 401. The same value is advertised as
 // the manifest's `token` default, which BitChord forwards automatically.
-// Honest scope: anyone holding the manifest URL holds the key — this stops
-// scanners and drive-by use, not someone you shared the URL with. True
-// revocation = rotating the token AND/OR the manifest path.
+// Token must be URL-safe (hex recommended). Honest scope: anyone holding a
+// full prefixed URL holds the key — this stops scanners and drive-by use,
+// not someone you shared the URL with. True revocation = rotate the token
+// (old URLs die instantly since the path itself changes).
 const ADDON_TOKEN = process.env.ADDON_TOKEN ?? "";
 
 // How long to collect distributed SoulSeek search responses before answering.
