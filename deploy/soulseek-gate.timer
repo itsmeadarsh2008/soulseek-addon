@@ -1,0 +1,9 @@
+[Unit]
+Description=Hourly SoulSeek share gate (TeraBox archiving)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

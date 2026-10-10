@@ -1,0 +1,9 @@
+[Unit]
+Description=SoulSeek share gate (archive idle downloads to TeraBox)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/root/soulseek-addon/prune.env
+ExecStart=/root/soulseek-addon/share-gate.sh
+StandardOutput=append:/var/log/soulseek-prune.log
+StandardError=append:/var/log/soulseek-prune.log
