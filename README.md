@@ -36,7 +36,7 @@ flowchart TD
     Addon --> Media
     Media -->|bytes| CF[(Cloudflare edge)]
 
-    subgraph Upkeep["hourly"]
+    subgraph Upkeep["on disk pressure"]
         P1[prune: 12h TTL + 4GB cap<br/>+ 80% disk pressure] --> D[(origin disk)]
         G1[share-gate: promote<br/>after 6h idle] --> SH[(shared dir → slskd shares)]
     end
@@ -75,7 +75,7 @@ flowchart TD
 |---|---|---|
 | BitChord app | search 10 min, stream 5 min | client-side |
 | Addon memory | search hits, stream bodies | 10 / 5 min (empties never cached) |
-| Origin disk | downloaded files | 12h idle + 4GB cap + 80% disk-pressure eviction (`deploy/prune.sh`, hourly) |
+| Origin disk | downloaded files | 12h idle + 4GB cap + 80% disk-pressure eviction (`deploy/prune.sh`, event-driven via monitor) |
 | Cloudflare edge | immutable `/media/*` | 30d + tiered PoPs |
 
 **Sharing (SoulSeek → network):** optional and currently ON for the downloads
@@ -131,7 +131,7 @@ Flow: `BitChord → /search → slskd POST /api/v0/searches {searchText} → pol
   `src/slskd.js → enqueueDownload()`. File serving reads the shared `DOWNLOAD_DIR`.
 - BitChord requires HTTPS + absolute URLs in production.
 
-## Edge cache (Cloudflare, branch `cf-edge-cache`)
+## Edge cache (Cloudflare)
 
 `/media/:id` sends completeness-gated headers so a CDN can offload repeats:
 
@@ -154,27 +154,32 @@ from `DOWNLOAD_DIR` so completed files skip the per-request slskd check.
 
 Edge caching doesn't shrink origin disk by itself — evicted edge copies re-fetch
 from origin. The fix: with edge repeats absorbing replays, drop the origin TTL.
-`deploy/prune.sh` (daily via `deploy/soulseek-prune.timer`) deletes files neither
-read nor written in `TTL_HOURS` (default 48) plus a `MAX_MB` safety cap (default 4096):
+`deploy/prune.sh` deletes files neither read nor written in `TTL_HOURS`
+(default 48), plus a `MAX_MB` safety cap (default 4096), plus disk-pressure
+eviction past `DISK_MAX_PCT` (default 80):
 
 ```bash
 # /root/soulseek-addon/prune.env — with edge cache on, 12h keeps origin tiny:
 TTL_HOURS=12
 MAX_MB=4096
+DISK_MAX_PCT=80
 ```
 
-Set `TTL_HOURS` in `prune.env`, install the timer from `deploy/`, done.
+No schedule: `deploy/prune-monitor.sh` (via `deploy/soulseek-prune-monitor.service`)
+watches disk every 60s and runs the prune **once** per crossing of the threshold,
+re-arming only after usage drops 5 points back. One fill-up = exactly one cleanup.
 
-## Share stopper (quarantine gate)
+## Share stopper (quarantine gate, opt-in)
 
-Fresh downloads are NOT shared immediately. `deploy/share-gate.sh` (same hourly
-timer, runs before prune) moves files from staging (`downloads/`) to the stable
-share dir (`shared/`) only after `SHARE_DELAY_HOURS` (default 24) with no reads
-or writes — and never touches slskd's `incomplete/` area. Playback is unaffected
-(the addon serves staging instantly); only SoulSeek-network sharing is gated.
+Fresh downloads can be held back from sharing: `deploy/share-gate.sh` moves files
+from staging (`downloads/`) to the stable share dir (`shared/`) only after
+`SHARE_DELAY_HOURS` (default 24) with no reads or writes — and never touches
+slskd's `incomplete/` area. Playback is unaffected (the addon serves staging
+instantly); only SoulSeek-network sharing is gated.
 
 Setup: `shared:/shared` is already in `docker-compose.yml` (both services).
-Point slskd shares at `/shared` instead of `/downloads`:
+Point slskd shares at `/shared` instead of `/downloads` and run the gate before
+prune in `deploy/soulseek-prune.service`:
 
 ```yaml
 shares:
@@ -184,3 +189,6 @@ shares:
 
 Keep `TTL_HOURS` > `SHARE_DELAY_HOURS` or files prune before ever being shared.
 The stable dir gets its own retention (`SHARED_TTL_HOURS`, default 720h).
+
+Live default: the gate is parked and slskd shares `/downloads` directly
+(immediate sharing). Arm the gate only if you want the delay.
