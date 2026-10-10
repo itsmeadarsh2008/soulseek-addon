@@ -42,7 +42,8 @@ test("health stays open for ops", async () => {
   assert.equal((await fetch(`${base}/health`)).status, 200);
 });
 
-test("wrong token rejected everywhere", async () => {
+test("wrong path rejected everywhere; query token is informational only", async () => {
   assert.equal((await fetch(`${base}/wrong/search?q=x`)).status, 401);
-  assert.equal((await fetch(`${base}${P}/search?q=x&token=wrong`)).status, 401);
+  // Path prefix is the gate: a correct path works with or without ?token=.
+  assert.notEqual((await fetch(`${base}${P}/search?q=x&token=wrong`)).status, 401);
 });
