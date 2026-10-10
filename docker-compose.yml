@@ -36,6 +36,7 @@ services:
       # TERABOX_DIR: set + bind-mount the rclone mount (see README).
       # Left unset here so plain `docker compose up` works without a mount.
       - TERABOX_DIR=${TERABOX_DIR:-}
+      - ADDON_TOKEN=${ADDON_TOKEN:-}
     volumes:
       - ./src:/app/src
       - ./package.json:/app/package.json
