@@ -4,6 +4,64 @@ BitChord talks to 3 `GET` routes on this server (`/manifest.json`, `/search`, `/
 SoulSeek has no HTTP API, so this server is a **gateway**: it logs into SoulSeek via
 **slskd** (headless daemon — no desktop app needed) and serves the bytes back over HTTPS.
 
+## How it works
+
+```
+BitChord app
+  │  HTTPS (manifest / search / stream)
+  ▼
+Caddy (TLS, :443) ──► addon :3001 ──► slskd :5030 ──► SoulSeek network
+  │                        │                 │
+  │                        │                 └── distributed search mesh + peer transfers
+  │                        └── serves /media/:id from shared disk (Range + HEAD + MIME)
+  └── Cloudflare edge (caches immutable /media/* for 30d, tiered)
+```
+
+**One play, end to end:**
+
+1. **Discover** — BitChord reads `/manifest.json` (addon id, resources, quality settings).
+2. **Search** — `GET /search?q=…&quality=…` fans out to the SoulSeek distributed
+   network via slskd (`POST /api/v0/searches {searchText}`, polled to completion,
+   early exit at 8 usable tracks). Empty phrasing retries distinctive words
+   automatically. Identical concurrent queries share one slskd search.
+3. **Rank** — filenames are parsed path-aware (`Artist/Album/01 Title`,
+   track-number stripping, quality-tag cleanup, never numeric "artists"), then
+   ordered: exact recording → fidelity (hi-res lossless › ALAC › FLAC › HIGH by
+   real bitrate › LOW) → peer speed (free upload slot first). Bitrates SoulSeek
+   never reports are derived from file size ÷ duration, so every row carries an
+   honest, BitChord-recognized tier — which is what lets lossless upgrades win.
+4. **Prefetch** — the top 3 hits start downloading in the background immediately,
+   so tapping play usually finds bytes already flowing.
+5. **Stream** — `GET /stream/{id}` enqueues the peer download (exact byte size
+   required — slskd aborts on mismatch), waits for the *complete* file (deep
+   queues fail fast to 404 so BitChord moves on), and returns an absolute media
+   URL plus true codec/container/sample-rate/bit-depth/bitrate metadata.
+6. **Play** — `GET /media/:id` serves bytes with Range + HEAD + correct MIME.
+   Complete files send `Cache-Control: public, immutable` (edge caches them);
+   partials send `no-store` (the edge must never learn a truncated song).
+
+**Caching, layer by layer** (each layer only sees misses from the one above):
+
+| Layer | What | TTL |
+|---|---|---|
+| BitChord app | search 10 min, stream 5 min | client-side |
+| Addon memory | search hits, stream bodies | 10 / 5 min (empties never cached) |
+| Origin disk | downloaded files | 12h idle + 4GB cap + 80% disk-pressure eviction (`deploy/prune.sh`, hourly) |
+| Cloudflare edge | immutable `/media/*` | 30d + tiered PoPs |
+
+**Sharing (SoulSeek → network):** optional and currently ON for the downloads
+cache. Fresh downloads can be quarantined first (`deploy/share-gate.sh` promotes
+only files idle past `SHARE_DELAY_HOURS` into `/shared/`; playback is unaffected
+either way). One login per client — two simultaneous logins as the same user
+kick each other off, so give every deployment its own SoulSeek account.
+
+**Failure semantics (all deliberate):** unknown track → `404` (next source);
+peer queued/offline → `404`; slskd throttled → `429 + Retry-After` (BitChord
+backs off); empty search → `200 []` (soft miss). Nothing ever 500s on P2P flakiness.
+
+**Typical timing:** search 3–5s warm (distributed physics + early exit), stream
+~2s warm / ~10s cold first fetch, media bytes edge-fast (`HIT`) after first play.
+
 ## Do I need SoulSeek installed?
 
 **Short: something must stay logged into SoulSeek, but not the desktop app.**
