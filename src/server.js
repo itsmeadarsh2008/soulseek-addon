@@ -8,6 +8,7 @@ import { config } from "./config.js";
 import { searchMock, streamMock } from "./mock.js";
 import { decodeId, describeFile, rankTracks, fallbackQueries } from "./audio.js";
 import { downloadState, enqueueDownload, searchSoulseek } from "./slskd.js";
+import { searchTerabox, streamTerabox } from "./terabox.js";
 
 const searchCache = new Map(); // q -> { at, tracks } (BitChord caches ~10 min)
 const streamCache = new Map(); // id -> { at, body } (BitChord caches ~5 min)
@@ -24,9 +25,11 @@ const json = (res, status, value) => {
 };
 
 function manifest() {
+  const suffix = config.BACKEND === "terabox" ? " (TeraBox)"
+    : config.BACKEND === "mock" ? " (mock — no backend connected)" : "";
   return {
-    id: config.ADDON_ID,
-    name: `${config.ADDON_NAME}${config.MOCK_MODE ? " (mock — slskd not connected)" : ""}`,
+    id: config.BACKEND === "terabox" ? "dev.terabox.addon" : config.ADDON_ID,
+    name: `${config.BACKEND === "terabox" ? "TeraBox Library" : config.ADDON_NAME}${suffix}`,
     version: config.ADDON_VERSION,
     resources: ["search", "stream"],
     allowDownloads: 1,
@@ -42,10 +45,19 @@ async function handleSearch(url, res) {
 
   const t0 = Date.now();
   try {
-    let tracks = config.MOCK_MODE ? searchMock(q) : await searchSoulseek(q);
+    let tracks;
+    if (config.BACKEND === "mock") {
+      tracks = searchMock(q);
+    } else if (config.BACKEND === "terabox") {
+      // Catalog match (no network search exists for TeraBox shares).
+      tracks = await searchTerabox(q);
+    } else {
+      tracks = await searchSoulseek(q);
+    }
     // Empty on P2P often means the phrasing missed, not that nothing exists —
     // retry distinctive words before giving up (capped: each costs seconds).
-    if (!config.MOCK_MODE && tracks.length === 0) {
+    // SoulSeek-only: the catalog backend has no live search to retry.
+    if (config.BACKEND === "soulseek" && tracks.length === 0) {
       const seen = new Set();
       for (const alt of fallbackQueries(q)) {
         const more = await searchSoulseek(alt, { timeoutMs: 6000 }).catch(() => []);
@@ -70,8 +82,8 @@ async function handleSearch(url, res) {
     console.error(`search ok: q=${JSON.stringify(q)} n=${tracks.length} ms=${Date.now() - t0}`);
     // Prefetch: BitChord usually plays one of the top hits next. Start those
     // downloads NOW in the background so /stream resolves in seconds.
-    // Skipped during the post-failure cooldown (see above).
-    if (!config.MOCK_MODE && Date.now() >= prefetchCooldownUntil) {
+    // SoulSeek-only, and skipped during the post-failure cooldown (see above).
+    if (config.BACKEND === "soulseek" && Date.now() >= prefetchCooldownUntil) {
       const PREFETCH_N = Number(process.env.PREFETCH_N ?? 3);
       for (const t of tracks.slice(0, PREFETCH_N)) {
         enqueueDownload(t.id, t._size).catch(() => {});
@@ -94,11 +106,24 @@ async function handleStream(id, res) {
   const hit = streamCache.get(id);
   if (hit && Date.now() - hit.at < STREAM_TTL) return json(res, 200, hit.body);
 
-  if (config.MOCK_MODE) {
+  if (config.BACKEND === "mock") {
     const body = streamMock(id);
     if (!body) return json(res, 404, { error: "not in this addon" });
     streamCache.set(id, { at: Date.now(), body });
     return json(res, 200, body);
+  }
+
+  if (config.BACKEND === "terabox") {
+    // Direct links expire: resolve fresh on every stream (fast), cache briefly.
+    try {
+      const body = await streamTerabox(id);
+      if (!body) return json(res, 404, { error: "not in this addon" });
+      streamCache.set(id, { at: Date.now(), body });
+      return json(res, 200, body);
+    } catch (err) {
+      console.error("terabox stream failed:", err.message);
+      return json(res, 404, { error: "not in this addon" });
+    }
   }
 
   // Real mode: ask the peer to send the file, wait for first bytes on disk.
@@ -187,6 +212,7 @@ async function waitForFile(id) {
 function findOnDisk(basename) {
   const roots = [config.DOWNLOAD_DIR, config.INCOMPLETE_DIR];
   if (config.SHARED_DIR) roots.push(config.SHARED_DIR);
+  if (config.TERABOX_DIR) roots.push(config.TERABOX_DIR);
   for (const root of roots) {
     const hit = walk(root, basename);
     if (hit) return hit;
@@ -313,6 +339,6 @@ export function createServer() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   createServer().listen(config.PORT, () => {
-    console.log(`soulseek-addon on :${config.PORT} (${config.MOCK_MODE ? "MOCK mode — set SLSKD_URL + SLSKD_API_KEY for real SoulSeek" : "slskd connected"})`);
+    console.log(`soulseek-addon on :${config.PORT} (backend=${config.BACKEND})`);
   });
 }
