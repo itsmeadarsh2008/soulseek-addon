@@ -172,8 +172,11 @@ async function handleStream(id, res) {
     // from the search-reported size+duration (slskd never reports bitrate).
     const bps = meta.bitrate
       ?? (meta0?.size && meta0?.duration ? Math.round((meta0.size * 8) / meta0.duration) : undefined);
+    const mediaBase = config.ADDON_TOKEN
+      ? `${config.PUBLIC_BASE_URL}/${config.ADDON_TOKEN}/media`
+      : `${config.PUBLIC_BASE_URL}/media`;
     const body = {
-      url: `${config.PUBLIC_BASE_URL}/media/${encodeURIComponent(id)}`,
+      url: `${mediaBase}/${encodeURIComponent(id)}`,
       format: meta.format,
       quality: meta.lossless
         ? (meta0?.bitDepth && meta0.bitDepth > 16
@@ -418,20 +421,34 @@ function contentType(diskPath) {
 export function createServer() {
   return http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    if (req.method === "GET" && url.pathname === "/manifest.json") return json(res, 200, manifest());
-    if (req.method === "GET" && url.pathname === "/search") {
+    // Token-in-path: when ADDON_TOKEN is set, every addon route lives under
+    // /<token>/... (manifest included). Bare paths 401. /health stays open
+    // for ops monitoring (reveals nothing sensitive).
+    let route = url.pathname;
+    if (config.ADDON_TOKEN) {
+      const segs = url.pathname.split("/").filter(Boolean);
+      if (segs[0] !== config.ADDON_TOKEN) {
+        if (!(req.method === "GET" && url.pathname === "/health")) {
+          return json(res, 401, { error: "addon token required in path" });
+        }
+      } else {
+        route = "/" + segs.slice(1).join("/");
+      }
+    }
+    if (req.method === "GET" && route === "/manifest.json") return json(res, 200, manifest());
+    if (req.method === "GET" && route === "/search") {
       if (!checkToken(url, res)) return undefined;
       return handleSearch(url, res);
     }
-    if (req.method === "GET" && url.pathname.startsWith("/stream/")) {
+    if (req.method === "GET" && route.startsWith("/stream/")) {
       if (!checkToken(url, res)) return undefined;
-      return handleStream(decodeURIComponent(url.pathname.slice(8)), res);
+      return handleStream(decodeURIComponent(route.slice(8)), res);
     }
-    if ((req.method === "GET" || req.method === "HEAD") && url.pathname.startsWith("/media/")) {
+    if ((req.method === "GET" || req.method === "HEAD") && route.startsWith("/media/")) {
       if (!checkToken(url, res)) return undefined;
-      return handleMedia(decodeURIComponent(url.pathname.slice(7)), req, res);
+      return handleMedia(decodeURIComponent(route.slice(7)), req, res);
     }
-    if (req.method === "GET" && url.pathname === "/health") {
+    if (req.method === "GET" && route === "/health") {
       return json(res, 200, { ok: true, mock: config.MOCK_MODE });
     }
     return json(res, 404, { error: "not found" });
