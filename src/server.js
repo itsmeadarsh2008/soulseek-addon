@@ -37,6 +37,7 @@ async function handleSearch(url, res) {
   const hit = searchCache.get(q.toLowerCase());
   if (hit && Date.now() - hit.at < SEARCH_TTL) return json(res, 200, { tracks: hit.tracks });
 
+  const t0 = Date.now();
   try {
     let tracks = config.MOCK_MODE ? searchMock(q) : await searchSoulseek(q);
     // Empty on P2P often means the phrasing missed, not that nothing exists —
@@ -63,6 +64,7 @@ async function handleSearch(url, res) {
     // Strip internal (_-prefixed) fields before responding.
     const pub = tracks.map((t) => Object.fromEntries(Object.entries(t).filter(([k]) => !k.startsWith("_"))));
     json(res, 200, { tracks: pub });
+    console.error(`search ok: q=${JSON.stringify(q)} n=${tracks.length} ms=${Date.now() - t0}`);
     // Prefetch: BitChord usually plays one of the top hits next. Start those
     // downloads NOW in the background so /stream resolves in seconds.
     if (!config.MOCK_MODE) {
@@ -95,6 +97,7 @@ async function handleStream(id, res) {
   }
 
   // Real mode: ask the peer to send the file, wait for first bytes on disk.
+  const t0 = Date.now();
   try {
     const meta0 = findCachedMeta(id);
     // Enqueue best-effort: slskd 500s when the file is already downloaded/queued,
@@ -124,6 +127,7 @@ async function handleStream(id, res) {
       ...(meta0?.bitDepth ? { bitDepth: meta0.bitDepth } : {}),
     };
     streamCache.set(id, { at: Date.now(), body });
+    console.error(`stream ok: ms=${Date.now() - t0}`);
     json(res, 200, body);
   } catch (err) {
     console.error("stream failed:", err.message);
@@ -154,13 +158,20 @@ async function waitForFile(id) {
   const { filename } = decodeId(id);
   const base = filename.split(/[\\/]/).pop();
   const deadline = Date.now() + config.STREAM_WAIT_MS;
+  let checks = 0;
   while (Date.now() < deadline) {
     const hit = findOnDisk(base);
     if (hit) {
       const expected = (await downloadState(id).catch(() => null))?.size;
       if (!expected || fs.statSync(hit).size >= expected) return { filename, diskPath: hit };
     } else {
-      await downloadState(id).catch(() => null); // keep slskd polling warm
+      const st = await downloadState(id).catch(() => null); // keep slskd polling warm
+      // Fast-fail a hopeless queue: no bytes after a few checks AND peer reports
+      // a deep queue means minutes of waiting — 404 now so BitChord moves on.
+      if (!hit && ++checks >= 6 && st) {
+        const place = st.placeInQueue ?? st.queuePosition ?? st.queueLength ?? 0;
+        if (typeof place === "number" && place > 25) return null;
+      }
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
