@@ -8,7 +8,8 @@
 # Env: TTL_HOURS (default 48), MAX_MB (default 4096), DISK_MAX_PCT (default 80),
 # DATA_DIR (staging volume path), SHARED_DIR (stable share volume, optional),
 # SHARED_TTL_HOURS (default 720), SHARED_MAX_MB (default 6144),
-# MOUNT (filesystem to watch, default /).
+# MOUNT (filesystem to watch, default /), SKIP_STAGING (default 0: when 1,
+# only the shared/archive dir is pruned — used by the monthly TeraBox swipe).
 # Keep TTL_HOURS > SHARE_DELAY_HOURS or the gate never sees a file.
 # Runs hourly via soulseek-prune.timer. Logs to /var/log/soulseek-prune.log.
 D=${DATA_DIR:-/var/lib/docker/volumes/soulseek-addon_downloads/_data}
@@ -38,7 +39,11 @@ prune_dir() {
 }
 
 echo "=== $(date -u +%FT%TZ) prune start (disk: $(df "$MOUNT" | tail -1 | awk '{print $5}')) ==="
-prune_dir "$D" "$TTL_HOURS" "$MAX_MB" staging
+if [ "${SKIP_STAGING:-0}" != "1" ]; then
+  prune_dir "$D" "$TTL_HOURS" "$MAX_MB" staging
+else
+  echo "--- staging skipped (SKIP_STAGING=1) ---"
+fi
 if [ -n "$SHARED" ]; then
   prune_dir "$SHARED" "$SHARED_TTL_HOURS" "$SHARED_MAX_MB" shared
 fi
