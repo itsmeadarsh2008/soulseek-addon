@@ -37,6 +37,7 @@ services:
       # Left unset here so plain `docker compose up` works without a mount.
       - TERABOX_DIR=${TERABOX_DIR:-}
       - ADDON_TOKEN=${ADDON_TOKEN:-}
+      - PREFETCH_N=${PREFETCH_N:-3}
     volumes:
       - ./src:/app/src
       - ./package.json:/app/package.json
