@@ -4,7 +4,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { config } from "./config.js";
+import { config, teraboxEnabled } from "./config.js";
 import { searchMock, streamMock } from "./mock.js";
 import { decodeId, describeFile, rankTracks, fallbackQueries } from "./audio.js";
 import { downloadState, enqueueDownload, searchSoulseek } from "./slskd.js";
@@ -189,7 +189,7 @@ async function handleStream(id, res) {
     // Instant TeraBox archive: mirror completed downloads straight away so
     // the cache tier doesn't wait on the hourly gate. Fire-and-forget —
     // playback already answered. Skips files already under a stable root.
-    if (config.TERABOX_DIR) archiveToTerabox(won.diskPath).catch(() => {});
+    if (config.TERABOX_DIR && teraboxEnabled()) archiveToTerabox(won.diskPath).catch(() => {});
   } catch (err) {
     console.error("stream failed:", err.message);
     json(res, 404, { error: "not in this addon" });
@@ -305,7 +305,7 @@ async function archiveToTerabox(diskPath) {
 // (every 10s, up to 10min) and archives the moment the file lands complete.
 // Silent on timeout/miss — the hourly gate remains the backstop.
 async function watchPrefetch(id) {
-  if (!config.TERABOX_DIR) return;
+  if (!config.TERABOX_DIR || !teraboxEnabled()) return;
   const deadline = Date.now() + 10 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 10000));
@@ -330,7 +330,7 @@ async function watchPrefetch(id) {
 function findOnDisk(basename) {
   const roots = [config.DOWNLOAD_DIR, config.INCOMPLETE_DIR];
   if (config.SHARED_DIR) roots.push(config.SHARED_DIR);
-  if (config.TERABOX_DIR) roots.push(config.TERABOX_DIR);
+  if (config.TERABOX_DIR && teraboxEnabled()) roots.push(config.TERABOX_DIR);
   for (const root of roots) {
     const hit = walk(root, basename);
     if (hit) return hit;
