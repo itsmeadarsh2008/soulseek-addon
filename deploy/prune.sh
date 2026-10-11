@@ -25,7 +25,8 @@ SHARED_MAX_MB=${SHARED_MAX_MB:-6144}
 prune_dir() {
   dir=$1; ttl_h=$2; cap_mb=$3; label=$4
   [ -d "$dir" ] || return 0
-  ttl_min=$((ttl_h * 60))
+  # Floor at 1: find's +0 matches nearly everything (minute granularity).
+  ttl_min=$((ttl_h * 60)); [ "$ttl_min" -lt 1 ] && ttl_min=1
   echo "--- $label start (du: $(du -sh "$dir" | cut -f1), ttl: ${ttl_h}h, cap: ${cap_mb}M) ---"
   find "$dir" -type f -amin +"$ttl_min" -mmin +"$ttl_min" -print -delete
   while [ "$(du -sm "$dir" | cut -f1)" -gt "$cap_mb" ]; do
