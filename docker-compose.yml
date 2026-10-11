@@ -38,6 +38,8 @@ services:
       - TERABOX_DIR=${TERABOX_DIR:-}
       - ADDON_TOKEN=${ADDON_TOKEN:-}
       - PREFETCH_N=${PREFETCH_N:-3}
+      - WEBDAV_DIR=${WEBDAV_DIR:-}
+      - HIFI_INDEX=${HIFI_INDEX:-./hifi.index.json}
     volumes:
       - ./src:/app/src
       - ./package.json:/app/package.json
