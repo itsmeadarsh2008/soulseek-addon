@@ -1,0 +1,15 @@
+[Unit]
+Description=SoulSeek watchdog (slskd login + addon health)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/root/soulseek-addon/soulseek-watchdog.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/soulseek-watchdog.log
+StandardError=append:/var/log/soulseek-watchdog.log
+
+[Install]
+WantedBy=multi-user.target
