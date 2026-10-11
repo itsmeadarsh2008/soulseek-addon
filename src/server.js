@@ -4,11 +4,12 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { config, teraboxEnabled } from "./config.js";
+import { config, teraboxEnabled, webdavEnabled } from "./config.js";
 import { searchMock, streamMock } from "./mock.js";
 import { decodeId, describeFile, rankTracks, fallbackQueries } from "./audio.js";
 import { downloadState, enqueueDownload, searchSoulseek } from "./slskd.js";
 import { searchTerabox, streamTerabox } from "./terabox.js";
+import { hifiTracks } from "./hifi.js";
 
 const searchCache = new Map(); // q -> { at, tracks } (BitChord caches ~10 min)
 const streamCache = new Map(); // id -> { at, body } (BitChord caches ~5 min)
@@ -78,8 +79,16 @@ async function handleSearch(url, res) {
       }
     }
     // Exact recording first, nudged toward the requested tier: BitChord
-    // evaluates recording matches in our order.
+    // evaluates recording matches in our order. Library-mount tracks merge
+    // in here so one search covers SoulSeek + local library at once.
     const want = url.searchParams.get("quality") ?? "";
+    if (config.BACKEND === "soulseek") {
+      const qwords = new Set(q.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1));
+      for (const t of hifiTracks()) {
+        const hay = `${t.title} ${t.artist} ${t.album ?? ""}`.toLowerCase();
+        if ([...qwords].some((w) => hay.includes(w))) tracks.push(t);
+      }
+    }
     tracks = rankTracks(q, tracks, want).slice(0, 20);
     // Cache hits only (full rows incl. internals for /stream fidelity lookup).
     if (tracks.length > 0) searchCache.set(q.toLowerCase(), { at: Date.now(), tracks });
@@ -164,6 +173,7 @@ async function handleStream(id, res) {
     // from the search-reported size+duration (slskd never reports bitrate).
     const bps = meta.bitrate
       ?? (meta0?.size && meta0?.duration ? Math.round((meta0.size * 8) / meta0.duration) : undefined);
+    const srcLabel = meta0?.source === "hifi" ? "Hifi Library" : "SoulSeek";
     const mediaBase = config.ADDON_TOKEN
       ? `${config.PUBLIC_BASE_URL}/${config.ADDON_TOKEN}/media`
       : `${config.PUBLIC_BASE_URL}/media`;
@@ -172,9 +182,9 @@ async function handleStream(id, res) {
       format: meta.format,
       quality: meta.lossless
         ? (meta0?.bitDepth && meta0.bitDepth > 16
-          ? `Lossless · Hi-Res ${meta0.bitDepth}-bit${meta0.sampleRate ? ` / ${(meta0.sampleRate / 1000).toFixed(1)} kHz` : ""} (SoulSeek)`
-          : "Lossless (SoulSeek)")
-        : bps ? `SoulSeek · ~${Math.round(bps / 1000)} kbps` : "SoulSeek",
+          ? `Lossless · Hi-Res ${meta0.bitDepth}-bit${meta0.sampleRate ? ` / ${(meta0.sampleRate / 1000).toFixed(1)} kHz` : ""} (${srcLabel})`
+          : `Lossless (${srcLabel})`)
+        : bps ? `${srcLabel} · ~${Math.round(bps / 1000)} kbps` : srcLabel,
       codec: meta.codec,
       container: meta.container,
       manifest: "none",
@@ -278,6 +288,7 @@ function findCachedMeta(id) {
         duration: typeof hit.duration === "number" ? hit.duration : undefined,
         sampleRate: typeof hit._sampleRate === "number" ? hit._sampleRate : undefined,
         bitDepth: typeof hit._bitDepth === "number" ? hit._bitDepth : undefined,
+        source: hit._source ?? "soulseek",
       };
     }
   }
@@ -331,6 +342,7 @@ function findOnDisk(basename) {
   const roots = [config.DOWNLOAD_DIR, config.INCOMPLETE_DIR];
   if (config.SHARED_DIR) roots.push(config.SHARED_DIR);
   if (config.TERABOX_DIR && teraboxEnabled()) roots.push(config.TERABOX_DIR);
+  if (config.WEBDAV_DIR && webdavEnabled()) roots.push(config.WEBDAV_DIR);
   for (const root of roots) {
     const hit = walk(root, basename);
     if (hit) return hit;
