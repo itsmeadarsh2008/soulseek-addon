@@ -95,9 +95,9 @@ async function handleSearch(url, res) {
     if (config.BACKEND === "soulseek" && Date.now() >= prefetchCooldownUntil) {
       const PREFETCH_N = Number(process.env.PREFETCH_N ?? 3);
       for (const t of tracks.slice(0, PREFETCH_N)) {
-        enqueueDownload(t.id, t._size)
-          .then(() => watchPrefetch(t.id))
-          .catch(() => {});
+        // Watch regardless of enqueue outcome: slskd 500s when the file is
+        // already queued/downloading, which is exactly when watching matters.
+        enqueueDownload(t.id, t._size).catch(() => {}).finally(() => watchPrefetch(t.id).catch(() => {}));
       }
     }
   } catch (err) {
