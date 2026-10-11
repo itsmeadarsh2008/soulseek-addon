@@ -27,7 +27,12 @@ export function hifiTracks() {
       return dot >= 0 && AUDIO_EXTS.has(e.path.slice(dot).toLowerCase());
     })
     .map((e) => {
-    const meta = describeFile(e.path, { size: e.size });
+    const meta = describeFile(e.path, {
+      size: e.size,
+      length: e.duration,
+      sampleRate: e.sampleRate,
+      bitDepth: e.bitDepth,
+    });
     // Library mounts are usually organized Artist/... — a lone folder names
     // the artist, not the album.
     const parsed = parseSoulseekMetadata(e.path, { singleDirMeans: "artist" });
@@ -36,13 +41,15 @@ export function hifiTracks() {
       title: parsed.title,
       artist: parsed.artist,
       album: parsed.album,
-      duration: undefined,
+      duration: typeof e.duration === "number" ? e.duration : undefined,
       format: meta.format,
       audioQuality: meta.audioQuality,
       _source: "hifi",
       _size: e.size,
       _bitrate: meta.bitrate,
       _codec: meta.codec,
+      _sampleRate: meta.sampleRate,
+      _bitDepth: meta.bitDepth,
       _username: "hifi",
       _filename: e.path,
     };
