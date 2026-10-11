@@ -1,0 +1,10 @@
+[Unit]
+Description=Monthly TeraBox archive swipe (30d+ unplayed pruned)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/root/soulseek-addon/prune.env
+Environment=SKIP_STAGING=1
+ExecStart=/root/soulseek-addon/prune.sh
+StandardOutput=append:/var/log/soulseek-prune.log
+StandardError=append:/var/log/soulseek-prune.log
