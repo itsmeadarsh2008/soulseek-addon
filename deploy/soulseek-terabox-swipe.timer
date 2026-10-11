@@ -1,0 +1,9 @@
+[Unit]
+Description=Monthly TeraBox archive swipe
+
+[Timer]
+OnCalendar=monthly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
