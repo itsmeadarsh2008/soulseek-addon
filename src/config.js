@@ -67,6 +67,14 @@ export function teraboxEnabled() {
   return (process.env.TERABOX_ENABLED ?? "1") !== "0";
 }
 
+// Read-only library mount (e.g. another box's WebDAV via rclone mount).
+// Served as immutable; never written to by the addon. Empty = disabled.
+const WEBDAV_DIR = process.env.WEBDAV_DIR ?? "";
+
+export function webdavEnabled() {
+  return (process.env.WEBDAV_ENABLED ?? "1") !== "0";
+}
+
 export const config = {
   PORT,
   PUBLIC_BASE_URL,
@@ -79,6 +87,7 @@ export const config = {
   INCOMPLETE_DIR,
   SHARED_DIR,
   TERABOX_DIR,
+  WEBDAV_DIR,
   BACKEND,
   ADDON_TOKEN,
   ADDON_ID: process.env.ADDON_ID ?? "dev.soulseek.addon",
