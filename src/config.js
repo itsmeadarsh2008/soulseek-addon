@@ -61,6 +61,12 @@ const SHARED_DIR = process.env.SHARED_DIR ?? "";
 // so they serve as immutable. Empty = disabled.
 const TERABOX_DIR = process.env.TERABOX_DIR ?? "";
 
+// Kill-switch for the whole TeraBox tier (serve + archive + gate target).
+// TERABOX_ENABLED=0 disables it without touching any other config.
+export function teraboxEnabled() {
+  return (process.env.TERABOX_ENABLED ?? "1") !== "0";
+}
+
 export const config = {
   PORT,
   PUBLIC_BASE_URL,
