@@ -170,7 +170,7 @@ export function splitArtistTitle(base) {
   return [null, t || base.trim()];
 }
 
-export function parseSoulseekMetadata(filename, { singleDirMeans = "album" } = {}) {
+export function parseSoulseekMetadata(filename) {
   const segs = filename.split(/[\\/]/);
   const rawBase = segs.pop().replace(/\.[^.]+$/, "");
   const dirs = segs.map((d) => d.trim()).filter(Boolean);
@@ -203,9 +203,6 @@ export function parseSoulseekMetadata(filename, { singleDirMeans = "album" } = {
         // Artist/Album/Title folder layout.
         artist = grandparent;
         album = parent;
-      } else if (singleDirMeans === "artist") {
-        // Curated library layout (Artist/Title): the lone folder is the artist.
-        artist = parent;
       } else {
         // Single folder: most likely the album ("Dhurandhar (2025)").
         album = parent;
