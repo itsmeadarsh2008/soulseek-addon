@@ -113,6 +113,8 @@ One 1-vCPU box serves tens of concurrent listeners; bursts are shed, not queued:
 - Identical concurrent searches share one slskd call (coalescing).
 - slskd-side: cap `transfers.download.slots` (~15) and upload slots (~5) in
   `slskd.yml` — unbounded parallelism is what melts small boxes.
+- VPS sizing: 1 vCPU / 1GB survives tens of users with the above; 2 vCPU /
+  2GB RAM / 25GB+ disk is the comfortable 50–100 user box (~$6–12/mo tier).
 - When outgrowing one box: 2 vCPU / 2GB RAM handles ~100 mixed users with edge
   on. Listener count barely matters (edge absorbs repeats); distinct new
   songs per minute is the real load metric.
