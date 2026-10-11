@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseSoulseekMetadata, rankTracks, fallbackQueries, describeFile } from "../src/audio.js";
+import { parseSoulseekMetadata, rankTracks, fallbackQueries, describeFile, probeAudioHeader } from "../src/audio.js";
 
 test("numbered file in album folder", () => {
   const m = parseSoulseekMetadata("Dhurandhar (2025)/03 - Title Track.mp3");
@@ -46,6 +46,37 @@ test("ranking puts exact recording first", () => {
   ];
   const ranked = rankTracks("Dhurandhar Title Track", tracks);
   assert.equal(ranked[0].id, "b");
+});
+
+test("swapped Title - Artist adopts the winning orientation", () => {
+  const tracks = [
+    { id: "x", title: "Unrelated", artist: "Nobody" },
+    { id: "b", title: "Ed Sheeran", artist: "Shape of You" },
+  ];
+  const ranked = rankTracks("Shape of You Ed Sheeran", tracks);
+  assert.equal(ranked[0].id, "b");
+  assert.equal(ranked[0].title, "Shape of You");
+  assert.equal(ranked[0].artist, "Ed Sheeran");
+});
+
+test("probeAudioHeader reads FLAC STREAMINFO", () => {
+  // Minimal STREAMINFO: last-block + type 0 + len 34, 10 size bytes,
+  // packed (44100Hz, stereo, 16-bit, 7938000 samples = 180s), 16 MD5 bytes.
+  const buf = Buffer.alloc(4 + 4 + 34);
+  buf.write("fLaC", 0);
+  buf[4] = 0x80; // last-block + STREAMINFO type 0
+  buf.writeUIntBE(34, 5, 3);
+  const packed = (BigInt(44100) << 44n) | (1n << 41n) | (15n << 36n) | BigInt(7938000);
+  buf.writeBigUInt64BE(packed, 18);
+  const m = probeAudioHeader(buf, ".flac");
+  assert.equal(m.sampleRate, 44100);
+  assert.equal(m.bitDepth, 16);
+  assert.equal(m.duration, 180);
+});
+
+test("probeAudioHeader returns {} for unknown", () => {
+  assert.deepEqual(probeAudioHeader(Buffer.from("not audio"), ".flac"), {});
+  assert.deepEqual(probeAudioHeader(Buffer.from("fLaC"), ".mp3"), {});
 });
 
 test("fallback queries split parentheticals", () => {
