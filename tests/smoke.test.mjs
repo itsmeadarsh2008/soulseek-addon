@@ -40,3 +40,20 @@ test("stream returns playable URL or clean 404", async () => {
   const miss = await get("/stream/does_not_exist");
   assert.equal(miss.status, 404);
 });
+
+test("burst of distinct searches sheds load fast, never hangs", async () => {
+  // More concurrent searches than MAX_SEARCHES: excess must 429 immediately
+  // (fast, with Retry-After) instead of piling onto slskd. Allowed outcomes
+  // are 200 (served) or 429 (shed) — never a hang, never a 500.
+  const t0 = Date.now();
+  const results = await Promise.all(
+    Array.from({ length: 8 }, (_, i) => get(`/search?q=burstprobe${Date.now() % 100000}_${i}`))
+  );
+  const elapsed = Date.now() - t0;
+  for (const r of results) assert.ok([200, 429].includes(r.status));
+  assert.ok(results.some((r) => r.status === 200), "at least one served");
+  assert.ok(elapsed < 60000, `burst took ${elapsed}ms`);
+  // Counters must not leak: a follow-up request still gets served-or-shed, not stuck.
+  const again = await get("/search?q=midnight");
+  assert.ok([200, 429].includes(again.status));
+});
