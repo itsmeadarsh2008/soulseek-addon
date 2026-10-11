@@ -18,6 +18,14 @@ const STREAM_TTL = 5 * 60 * 1000;
 // load for 60s so a struggling slskd can recover instead of spiraling.
 let prefetchCooldownUntil = 0;
 
+// Concurrency guard: bound simultaneous slskd-backed work so burst traffic
+// degrades to fast 429s (which BitChord honors with Retry-After) instead of
+// collapsing slskd into timeouts for everyone.
+const MAX_SEARCHES = Number(process.env.MAX_SEARCHES ?? 4);
+const MAX_STREAMS = Number(process.env.MAX_STREAMS ?? 12);
+let activeSearches = 0;
+let activeStreams = 0;
+
 const json = (res, status, value) => {
   const body = JSON.stringify(value);
   res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -50,6 +58,12 @@ async function handleSearch(url, res) {
   const hit = searchCache.get(q.toLowerCase());
   if (hit && Date.now() - hit.at < SEARCH_TTL) return json(res, 200, { tracks: hit.tracks });
 
+  // Shed load before touching slskd: a fast 429 beats a 40s timeout for all.
+  if (config.BACKEND === "soulseek" && activeSearches >= MAX_SEARCHES) {
+    res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "15" });
+    return res.end(JSON.stringify({ tracks: [], error: "busy, retry shortly" }));
+  }
+  activeSearches++;
   const t0 = Date.now();
   try {
     let tracks;
@@ -89,10 +103,10 @@ async function handleSearch(url, res) {
     console.error(`search ok: q=${JSON.stringify(q)} n=${tracks.length} ms=${Date.now() - t0}`);
     // Prefetch: BitChord usually plays one of the top hits next. Start those
     // downloads NOW in the background so /stream resolves in seconds.
-    // SoulSeek-only, and skipped during the post-failure cooldown (see above).
-    // Each prefetch is completion-watched: the moment its file lands complete,
-    // it archives to TeraBox like a played stream (no 6h gate wait).
-    if (config.BACKEND === "soulseek" && Date.now() >= prefetchCooldownUntil) {
+    // SoulSeek-only; skipped under load (active searches) and during the
+    // post-failure cooldown (see above). Each prefetch is completion-watched:
+    // the moment its file lands complete, it archives like a played stream.
+    if (config.BACKEND === "soulseek" && Date.now() >= prefetchCooldownUntil && activeSearches <= 2) {
       const PREFETCH_N = Number(process.env.PREFETCH_N ?? 3);
       for (const t of tracks.slice(0, PREFETCH_N)) {
         // Watch regardless of enqueue outcome: slskd 500s when the file is
@@ -110,6 +124,8 @@ async function handleSearch(url, res) {
     }
     // Fail soft: empty results let BitChord try the next source.
     json(res, 200, { tracks: [] });
+  } finally {
+    activeSearches--;
   }
 }
 
@@ -140,6 +156,12 @@ async function handleStream(id, res) {
   // Real mode: race sibling peers for the same recording. BitChord asks for
   // ONE track; if its peer is queued, trying the next identical recording
   // inside this request beats a 20s 404 + client retry (the 43s upgrade).
+  // Shed load first: too many concurrent resolutions 429 fast.
+  if (activeStreams >= MAX_STREAMS) {
+    res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "15" });
+    return res.end(JSON.stringify({ error: "busy, retry shortly" }));
+  }
+  activeStreams++;
   const t0 = Date.now();
   try {
     const ids = findSiblings(id);
@@ -193,6 +215,8 @@ async function handleStream(id, res) {
   } catch (err) {
     console.error("stream failed:", err.message);
     json(res, 404, { error: "not in this addon" });
+  } finally {
+    activeStreams--;
   }
 }
 
