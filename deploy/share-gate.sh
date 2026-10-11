@@ -11,6 +11,16 @@ SHARED=${SHARED_DIR:-/var/lib/docker/volumes/soulseek-addon_shared/_data}
 DELAY_HOURS=${SHARE_DELAY_HOURS:-24}
 [ -d "$STAGING" ] || exit 0
 mkdir -p "$SHARED"
+# Kill-switch: with the TeraBox tier disabled, a terabox destination is a
+# no-op (files stay in staging for the normal prune lifecycle).
+if [ "${TERABOX_ENABLED:-1}" = "0" ]; then
+  case "$SHARED" in
+    /terabox*)
+      echo "=== $(date -u +%FT%TZ) share-gate parked (TERABOX_ENABLED=0) ==="
+      exit 0
+      ;;
+  esac
+fi
 
 DELAY_MIN=$((DELAY_HOURS * 60))
 moved=0
