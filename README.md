@@ -101,6 +101,22 @@ rotate the token — old URLs die instantly because the path itself changes.
 **Typical timing:** search 3–5s warm (distributed physics + early exit), stream
 ~2s warm / ~10s cold first fetch, media bytes edge-fast (`HIT`) after first play.
 
+## Multi-user operation (50–100 users)
+
+One 1-vCPU box serves tens of concurrent listeners; bursts are shed, not queued:
+
+- `MAX_SEARCHES` (default 4) / `MAX_STREAMS` (default 12): excess requests get
+  instant `429 + Retry-After`, which BitChord honors — a fast no beats a 40s
+  timeout for everyone.
+- Prefetch pauses while loaded (`activeSearches > 1`) and for 60s after any
+  failure, so background work never amplifies a spike.
+- Identical concurrent searches share one slskd call (coalescing).
+- slskd-side: cap `transfers.download.slots` (~15) and upload slots (~5) in
+  `slskd.yml` — unbounded parallelism is what melts small boxes.
+- When outgrowing one box: 2 vCPU / 2GB RAM handles ~100 mixed users with edge
+  on. Listener count barely matters (edge absorbs repeats); distinct new
+  songs per minute is the real load metric.
+
 ## Do I need SoulSeek installed?
 
 **Short: something must stay logged into SoulSeek, but not the desktop app.**
