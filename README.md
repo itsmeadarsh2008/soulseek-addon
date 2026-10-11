@@ -38,8 +38,8 @@ flowchart TD
     Media -->|bytes| CF[(Cloudflare edge)]
 
     subgraph Upkeep["on disk pressure"]
-        P1[prune: 12h TTL + 4GB cap<br/>+ 80% disk pressure] --> D[(origin disk)]
-        G1[share-gate: promote<br/>after 6h idle] --> SH[(shared dir → slskd shares)]
+        P1[prune: 12h TTL + 3GB cap<br/>+ 80% disk pressure] --> D[(origin disk)]
+        G1[share-gate: promote<br/>after 6h idle] --> SH[(stable dir → slskd shares)]
     end
 
     SLSKD -->|downloads| D
@@ -63,9 +63,10 @@ flowchart TD
 4. **Prefetch** — the top 3 hits start downloading in the background immediately,
    so tapping play usually finds bytes already flowing.
 5. **Stream** — `GET /stream/{id}` enqueues the peer download (exact byte size
-   required — slskd aborts on mismatch), waits for the *complete* file (deep
-   queues fail fast to 404 so BitChord moves on), and returns an absolute media
-   URL plus true codec/container/sample-rate/bit-depth/bitrate metadata.
+   required — slskd aborts on mismatch), then races up to 3 same-recording
+   peers and returns the first complete file (deep queues fail fast to 404 so
+   BitChord moves on), with true codec/container/sample-rate/bit-depth/bitrate
+   metadata. Played streams mirror instantly to the archive tier.
 6. **Play** — `GET /media/:id` serves bytes with Range + HEAD + correct MIME.
    Complete files send `Cache-Control: public, immutable` (edge caches them);
    partials send `no-store` (the edge must never learn a truncated song).
@@ -181,6 +182,21 @@ Flow: `BitChord → /search → slskd POST /api/v0/searches {searchText} → pol
   `src/slskd.js → enqueueDownload()`. File serving reads the shared `DOWNLOAD_DIR`.
 - BitChord requires HTTPS + absolute URLs in production.
 
+## justfile (recurring ops)
+
+```bash
+just                    # list everything
+just test               # test suite
+just vps-status         # containers, disk, memory on the VPS
+just vps-slskd          # SoulSeek login + mesh state
+just vps-health         # addon manifest over public HTTPS
+just vps-search "…"     # search the live addon
+just vps-logs           # addon + slskd logs
+just vps-deploy         # ship src to VPS, restart addon
+just vps-prune          # run origin prune now
+just vps-disk           # cache sizes + prune log tail
+```
+
 ## Edge cache (Cloudflare)
 
 `/media/:id` sends completeness-gated headers so a CDN can offload repeats:
@@ -217,8 +233,9 @@ DISK_MAX_PCT=80
 ```
 
 No schedule: `deploy/prune-monitor.sh` (via `deploy/soulseek-prune-monitor.service`)
-watches disk every 60s and runs the prune **once** per crossing of the threshold,
-re-arming only after usage drops 5 points back. One fill-up = exactly one cleanup.
+watches disk every 60s and runs the prune on **every** crossing of the threshold
+(flock-guarded so slow runs never overlap — the monitor learned this the hard
+way when ingest outran single-shot cleanups).
 
 ## Share stopper (quarantine gate, opt-in)
 
@@ -241,5 +258,6 @@ shares:
 Keep `TTL_HOURS` > `SHARE_DELAY_HOURS` or files prune before ever being shared.
 The stable dir gets its own retention (`SHARED_TTL_HOURS`, default 720h).
 
-Live default: the gate is parked and slskd shares `/downloads` directly
-(immediate sharing). Arm the gate only if you want the delay.
+Live default: slskd shares the stable `/shared` set only (churn-free, so peers
+stop seeing a vanishing library); the gate is parked unless pointed at a live
+archive dir. Arm it only if you want delayed sharing.
