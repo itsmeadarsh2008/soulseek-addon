@@ -1,8 +1,8 @@
 [Unit]
-Description=Hourly SoulSeek share gate (TeraBox archiving)
+Description=SoulSeek share gate every 5 minutes (immediate archiving)
 
 [Timer]
-OnCalendar=hourly
+OnCalendar=*:0/5
 Persistent=true
 
 [Install]
