@@ -90,10 +90,14 @@ async function handleSearch(url, res) {
     // Prefetch: BitChord usually plays one of the top hits next. Start those
     // downloads NOW in the background so /stream resolves in seconds.
     // SoulSeek-only, and skipped during the post-failure cooldown (see above).
+    // Each prefetch is completion-watched: the moment its file lands complete,
+    // it archives to TeraBox like a played stream (no 6h gate wait).
     if (config.BACKEND === "soulseek" && Date.now() >= prefetchCooldownUntil) {
       const PREFETCH_N = Number(process.env.PREFETCH_N ?? 3);
       for (const t of tracks.slice(0, PREFETCH_N)) {
-        enqueueDownload(t.id, t._size).catch(() => {});
+        enqueueDownload(t.id, t._size)
+          .then(() => watchPrefetch(t.id))
+          .catch(() => {});
       }
     }
   } catch (err) {
@@ -294,6 +298,33 @@ async function archiveToTerabox(diskPath) {
   } catch { /* missing -> copy */ }
   await fs.promises.mkdir(path.dirname(dest), { recursive: true });
   await fs.promises.copyFile(diskPath, dest);
+  console.error(`terabox archived: ${rel}`);
+}
+
+// Background completion watch for one prefetched download: polls cheaply
+// (every 10s, up to 10min) and archives the moment the file lands complete.
+// Silent on timeout/miss — the hourly gate remains the backstop.
+async function watchPrefetch(id) {
+  if (!config.TERABOX_DIR) return;
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 10000));
+    let filename;
+    try {
+      filename = decodeId(id).filename;
+    } catch {
+      return;
+    }
+    const hit = findOnDisk(filename.split(/[\\/]/).pop());
+    if (!hit) continue;
+    const expected = (await downloadState(id).catch(() => null))?.size;
+    try {
+      if (!expected || fs.statSync(hit).size >= expected) {
+        await archiveToTerabox(hit);
+        return;
+      }
+    } catch { /* transient FS state; keep watching */ }
+  }
 }
 
 function findOnDisk(basename) {
