@@ -1,0 +1,7 @@
+[Unit]
+Description=slskd connection watchdog check
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/root/soulseek-addon/.env
+ExecStart=/root/soulseek-addon/slskd-watchdog.sh
