@@ -112,8 +112,9 @@ async function runSearch(query, timeoutMs) {
   // Slow-DB guard: on a loaded box slskd marks the search complete before its
   // /responses payload is readable — an empty read with a nonzero fileCount
   // means "not yet", not "nothing". Re-read briefly before giving up.
+  // (Seen live: 28 responses present server-side while all reads returned [].)
   if (!responses.length) {
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 8; i++) {
       await sleep(1000);
       responses = (await api(`/api/v0/searches/${encodeURIComponent(id)}/responses`, { label: "responses retry" }).catch(() => [])) ?? [];
       if (responses.length) break;
