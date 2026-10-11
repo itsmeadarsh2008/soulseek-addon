@@ -44,6 +44,49 @@ export function describeFile(filename, { bitrate, sampleRate, bitDepth, size, le
   };
 }
 
+// Read duration/fidelity from the first bytes of an audio file (no decode).
+// Returns { duration, sampleRate, bitDepth } or {} when unknown.
+// FLAC: STREAMINFO block. MP3: Xing/Info header. Others: unknown.
+export function probeAudioHeader(buf, ext) {
+  try {
+    if (ext === ".flac" && buf.subarray(0, 4).toString() === "fLaC") {
+      let off = 4;
+      for (let guard = 0; guard < 8; guard++) {
+        const type = buf[off] & 0x7f;
+        const len = buf.readUIntBE(off + 1, 3);
+        const last = buf[off] & 0x80;
+        off += 4;
+        if (type === 0 && len >= 18 && off + 18 <= buf.length) {
+          const sr = (buf.readUIntBE(off + 10, 3) >>> 4) & 0xfffff;
+          const bd = (((buf[off + 12] & 1) << 4) | (buf[off + 13] >>> 4)) + 1;
+          const hi = buf[off + 13] & 0x0f;
+          const lo = buf.readUIntBE(off + 14, 4);
+          const total = hi * 0x100000000 + lo;
+          if (sr > 0 && total > 0) {
+            return { duration: Math.round(total / sr), sampleRate: sr, bitDepth: bd === 32 ? undefined : bd };
+          }
+        }
+        off += len;
+        if (last || off >= buf.length) break;
+      }
+    }
+    if (ext === ".mp3") {
+      const tag = buf.indexOf("Xing") >= 0 ? "Xing" : buf.indexOf("Info") >= 0 ? "Info" : null;
+      if (tag) {
+        const o = buf.indexOf(tag);
+        const frames = buf.readUInt32BE(o + 8);
+        const v = (buf[2] >>> 3) & 0x03;
+        const layer = (buf[1] >>> 1) & 0x03;
+        const spf = v === 3 ? (layer === 3 ? 576 : 1152) : layer === 3 ? 576 : layer === 2 ? 1152 : 384;
+        const srTable = [44100, 48000, 32000];
+        const sr = srTable[(buf[2] >>> 2) & 0x03] ?? 44100;
+        if (frames > 0 && spf > 0) return { duration: Math.round((frames * spf) / sr) };
+      }
+    }
+  } catch { /* unknown */ }
+  return {};
+}
+
 // Track ids must be opaque + stable + URL-safe. SoulSeek identity is (username, filename).
 export function encodeId(username, filename) {
   return Buffer.from(JSON.stringify([username, filename]), "utf8").toString("base64url");
@@ -208,23 +251,39 @@ function qualityRank(t) {
   return 2 + Math.min(0.99, bps / 1e6);
 }
 
+function matchScore(qset, q, title, artist, album) {
+  const tt = tokens(title ?? "");
+  const at = tokens(artist ?? "");
+  const al = tokens(album ?? "");
+  let s = 0;
+  for (const w of new Set(tt)) if (qset.has(w)) s += 2;
+  if (q.length && q.every((w) => tt.includes(w))) s += 6; // full title coverage
+  for (const w of new Set(at)) if (qset.has(w)) s += 2;
+  for (const w of new Set(al)) if (qset.has(w)) s += 1;
+  // Positional: queries are usually "title … artist" — a title holding the
+  // query's opening words outranks one holding its tail. This is what breaks
+  // ties between "Shape of You / Ed Sheeran" and its swapped twin.
+  if (q.length && tt.includes(q[0])) s += 4;
+  return { s, full: q.length > 0 && q.every((w) => tt.includes(w)) };
+}
+
 export function rankTracks(query, tracks, quality = "") {
   const q = tokens(query);
   if (!q.length) return tracks;
   const qset = new Set(q);
   const lowFirst = quality.toLowerCase() === "low";
   const scored = tracks.map((t, i) => {
-    const tt = tokens(t.title ?? "");
-    const at = tokens(t.artist ?? "");
-    const al = tokens(t.album ?? "");
-    let s = 0;
-    for (const w of new Set(tt)) if (qset.has(w)) s += 2;
-    for (const w of new Set(at)) if (qset.has(w)) s += 2;
-    for (const w of new Set(al)) if (qset.has(w)) s += 1;
-    const full = q.every((w) => tt.includes(w));
+    // Peers misname files constantly ("Title - Artist"). Score both
+    // orientations; adopt the swapped fields when it clearly wins so
+    // BitChord receives correct metadata, not just a better order.
+    const normal = matchScore(qset, q, t.title, t.artist, t.album);
+    const flipped = matchScore(qset, q, t.artist, t.title, t.album);
+    const useFlipped = flipped.s > normal.s + 2;
+    const base = useFlipped ? flipped : normal;
+    const t2 = useFlipped ? { ...t, title: t.artist, artist: t.title } : t;
     // Order: exact recording, then fidelity (reversed for low requests),
     // then partial match, then peer speed (stable input order).
-    return { t, full, qr: qualityRank(t), s, i };
+    return { t: t2, full: base.full, qr: qualityRank(t), s: base.s, i };
   });
   scored.sort((a, b) =>
     (b.full - a.full) ||
