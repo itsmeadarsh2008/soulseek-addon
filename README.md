@@ -37,14 +37,15 @@ flowchart TD
     Addon --> Media
     Media -->|bytes| CF[(Cloudflare edge)]
 
-    subgraph Upkeep["on disk pressure"]
+    subgraph Upkeep["storage tiers"]
         P1[prune: 12h TTL + 3GB cap<br/>+ 80% disk pressure] --> D[(origin disk)]
-        G1[share-gate: promote<br/>after 6h idle] --> SH[(stable dir → slskd shares)]
+        G1[share-gate every 5min:<br/>idle files → archive] --> TB[(TeraBox 1TB)]
+        M1[monthly swipe:<br/>30d+ unplayed off TeraBox] --> TB
     end
 
     SLSKD -->|downloads| D
     D --> Media
-    SH -.->|peers download| SL
+    D -.->|stable set| SL
 ```
 
 **One play, end to end:**
@@ -237,27 +238,23 @@ watches disk every 60s and runs the prune on **every** crossing of the threshold
 (flock-guarded so slow runs never overlap — the monitor learned this the hard
 way when ingest outran single-shot cleanups).
 
-## Share stopper (quarantine gate, opt-in)
+## Share gate: immediate archiving + monthly TeraBox swipe
 
-Fresh downloads can be held back from sharing: `deploy/share-gate.sh` moves files
-from staging (`downloads/`) to the stable share dir (`shared/`) only after
-`SHARE_DELAY_HOURS` (default 24) with no reads or writes — and never touches
-slskd's `incomplete/` area. Playback is unaffected (the addon serves staging
-instantly); only SoulSeek-network sharing is gated.
+Finished downloads archive to TeraBox almost immediately: `deploy/share-gate.sh`
+runs every 5 minutes (`deploy/soulseek-gate.timer`) and moves anything idle
+past `SHARE_DELAY_HOURS` (default **0** — settled ~a minute, never mid-write,
+never from `incomplete/`). Playback is unaffected (staging serves instantly,
+and played streams mirror on completion regardless).
 
-Setup: `shared:/shared` is already in `docker-compose.yml` (both services).
-Point slskd shares at `/shared` instead of `/downloads` and run the gate before
-prune in `deploy/soulseek-prune.service`:
+With 1TB there is no retention pressure, so expiry is a **monthly swipe**
+(`deploy/soulseek-terabox-swipe.{service,timer}`): TeraBox files unplayed 30+
+days leave, oldest first, plus a generous size cap. `SKIP_STAGING=1` keeps the
+monthly job off local disk entirely.
 
-```yaml
-shares:
-  directories:
-    - /shared
+```bash
+# /root/soulseek-addon/prune.env
+SHARED_DIR=/terabox/soulseek
+SHARED_TTL_HOURS=720
+SHARED_MAX_MB=512000
+SHARE_DELAY_HOURS=0
 ```
-
-Keep `TTL_HOURS` > `SHARE_DELAY_HOURS` or files prune before ever being shared.
-The stable dir gets its own retention (`SHARED_TTL_HOURS`, default 720h).
-
-Live default: slskd shares the stable `/shared` set only (churn-free, so peers
-stop seeing a vanishing library); the gate is parked unless pointed at a live
-archive dir. Arm it only if you want delayed sharing.
