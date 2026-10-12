@@ -45,6 +45,7 @@ find "$STAGING" -type f -amin +"$GATE_MIN" -mmin +"$GATE_MIN" -print0 2>/dev/nul
       moved=$((moved + 1))
     fi
   done
-# prune empty staging dirs left behind
-find "$STAGING" -mindepth 1 -type d -empty -delete 2>/dev/null
+# prune empty staging dirs left behind (never slskd's incomplete/ itself:
+# empty is normal, and slskd refuses to start when it's missing)
+find "$STAGING" -mindepth 1 -type d -empty ! -path "$STAGING/incomplete" ! -path "$STAGING/incomplete/*" -delete 2>/dev/null
 echo "=== $(date -u +%FT%TZ) share-gate end (delay: ${DELAY_HOURS}h) ==="

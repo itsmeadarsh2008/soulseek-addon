@@ -14,6 +14,10 @@ const searchCache = new Map(); // q -> { at, tracks } (BitChord caches ~10 min)
 const streamCache = new Map(); // id -> { at, body } (BitChord caches ~5 min)
 const SEARCH_TTL = 10 * 60 * 1000;
 const STREAM_TTL = 5 * 60 * 1000;
+// Strip internal (_-prefixed) ranking/download fields before responding:
+// peer usernames, filenames, and queue stats must never leave the server.
+const publicTracks = (tracks) =>
+  tracks.map((t) => Object.fromEntries(Object.entries(t).filter(([k]) => !k.startsWith("_"))));
 // Prefetch circuit breaker: after any search failure, stop adding enqueue
 // load for 60s so a struggling slskd can recover instead of spiraling.
 let prefetchCooldownUntil = 0;
@@ -56,7 +60,7 @@ function manifest() {
 async function handleSearch(url, res) {
   const q = url.searchParams.get("q") ?? "";
   const hit = searchCache.get(q.toLowerCase());
-  if (hit && Date.now() - hit.at < SEARCH_TTL) return json(res, 200, { tracks: hit.tracks });
+  if (hit && Date.now() - hit.at < SEARCH_TTL) return json(res, 200, { tracks: publicTracks(hit.tracks) });
 
   // Shed load before touching slskd: a fast 429 beats a 40s timeout for all.
   if (config.BACKEND === "soulseek" && activeSearches >= MAX_SEARCHES) {
@@ -98,7 +102,7 @@ async function handleSearch(url, res) {
     // Cache hits only (full rows incl. internals for /stream fidelity lookup).
     if (tracks.length > 0) searchCache.set(q.toLowerCase(), { at: Date.now(), tracks });
     // Strip internal (_-prefixed) fields before responding.
-    const pub = tracks.map((t) => Object.fromEntries(Object.entries(t).filter(([k]) => !k.startsWith("_"))));
+    const pub = publicTracks(tracks);
     json(res, 200, { tracks: pub });
     console.error(`search ok: q=${JSON.stringify(q)} n=${tracks.length} ms=${Date.now() - t0}`);
     // Prefetch: BitChord usually plays one of the top hits next. Start those

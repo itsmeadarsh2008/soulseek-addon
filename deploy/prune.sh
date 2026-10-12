@@ -35,7 +35,9 @@ prune_dir() {
     echo "evict [$label]: $victim"
     rm -f "$victim"
   done
-  find "$dir" -mindepth 1 -type d -empty -delete 2>/dev/null
+  # Never remove slskd's incomplete dir itself: empty is normal, and slskd
+  # refuses to start when it's missing ("Invalid configuration").
+  find "$dir" -mindepth 1 -type d -empty ! -path "$dir/incomplete" ! -path "$dir/incomplete/*" -delete 2>/dev/null
   echo "--- $label end (du: $(du -sh "$dir" | cut -f1)) ---"
 }
 
