@@ -1,11 +1,12 @@
 # soulseek-addon — recurring workflows.
 # Run `just` (no args) to list everything.
-# VPS recipes ssh as root; override with VPS_HOST / VPS_SSH_USER env.
+# VPS recipes ssh as root. Configure YOUR host via env (never committed):
+#   export VPS_HOST=<your-server-ip> VPS_SSH_USER=root ADDON_URL=https://<your-host>
 
-vps_host := env("VPS_HOST", "your-vps-host")
+vps_host := env("VPS_HOST", "")
 vps_user := env("VPS_SSH_USER", "root")
 vps := vps_user + "@" + vps_host
-addon := "https://your-addon-host"
+addon := env("ADDON_URL", "")
 
 default:
     @just --list
@@ -24,12 +25,13 @@ test:
 check:
     node --check src/server.js && node --check src/slskd.js && node --check src/audio.js && node --check src/terabox.js && sh -n deploy/prune.sh && sh -n deploy/share-gate.sh && sh -n deploy/prune-monitor.sh && echo OK
 
-# ── VPS (your-vps-host) ──────────────────────────────────────────────────────
+# ── VPS (set VPS_HOST + ADDON_URL, see top) ────────────────────────────────────
 
 # Container + service states.
 vps-status:
     #!/usr/bin/env bash
     set -euo pipefail
+    [ -n "{{vps_host}}" ] || { echo "set VPS_HOST first (see justfile top)"; exit 1; }
     ssh -o BatchMode=yes {{vps}} 'docker ps | grep -E "slskd|soulseek|caddy|NAMES"; df -h / | tail -1; free -m | head -2 | tail -1'
 
 # SoulSeek login + distributed mesh state.
@@ -65,7 +67,7 @@ vps-deploy:
     set -euo pipefail
     tar czf /tmp/soulseek-addon.tar.gz src package.json
     scp -o StrictHostKeyChecking=no /tmp/soulseek-addon.tar.gz {{vps}}:/root/addon.tar.gz
-    ssh -o StrictHostKeyChecking=no {{vps}} 'tar xzf /root/addon.tar.gz -C /root/soulseek-addon && docker restart soulseek-addon && sleep 5 && curl -s --max-time 10 https://your-addon-host/manifest.json -o /dev/null -w "manifest:%{http_code}\n"'
+    ssh -o StrictHostKeyChecking=no {{vps}} 'tar xzf /root/addon.tar.gz -C /root/soulseek-addon && docker restart soulseek-addon && sleep 5 && curl -s --max-time 10 {{addon}}/manifest.json -o /dev/null -w "manifest:%{http_code}\n"'
     rm -f /tmp/soulseek-addon.tar.gz
 
 # Run the origin prune now.
