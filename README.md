@@ -4,10 +4,75 @@ BitChord talks to 3 `GET` routes on this server (`/manifest.json`, `/search`, `/
 SoulSeek has no HTTP API, so this server is a **gateway**: it logs into SoulSeek via
 **slskd** (headless daemon — no desktop app needed) and serves the bytes back over HTTPS.
 
-```
-BitChord app → HTTPS (manifest / search / stream) → Caddy (:443)
-  → addon (:3000) → REST (:5030) → slskd → SoulSeek network
-  → downloads land on origin disk → served at /media/:id (+ edge cache)
+```mermaid
+flowchart TD
+    BC[BitChord app] -->|HTTPS: manifest / search / stream| Caddy[Caddy TLS :443]
+    Caddy -->|127.0.0.1:3001| Addon[addon :3000]
+    Addon -->|REST :5030| SLSKD[slskd]
+    SLSKD -->|login + distributed mesh| SL[(SoulSeek network)]
+
+    subgraph Search["GET /search?q=…"]
+        S1[slskd distributed search<br/>early exit at 8 usable tracks] --> S2[parse filenames<br/>artist / title / album]
+        S2 --> S3[rank: recording › fidelity › peer speed]
+        S3 --> S4[prefetch top 3 in background]
+    end
+
+    subgraph Stream["GET /stream/:id"]
+        T1[enqueue exact-size download] --> T2{complete?}
+        T2 -->|yes| T3[return media URL<br/>+ true codec metadata]
+        T3 --> T5[mirror to TeraBox<br/>fire-and-forget]
+        T2 -->|queued / offline| T4[404 → next source]
+    end
+
+    subgraph Media["GET /media/:id"]
+        M1{on disk?<br/>downloads › shared › terabox} -->|complete| M2[200 immutable<br/>edge caches 30d]
+        M1 -->|partial| M3[206 progressive<br/>no-store]
+        M1 -->|missing| M4[404]
+    end
+
+    Addon --> Search
+    Addon --> Stream
+    Addon --> Media
+    Media -->|bytes| CF[(Cloudflare edge)]
+
+    subgraph Upkeep["storage tiers"]
+        P1[prune: 12h TTL + 3GB cap<br/>+ 80% disk pressure] --> D[(origin disk)]
+        G1[share-gate every 5min:<br/>idle files → archive] --> TB[(TeraBox 1TB)]
+        U1[monthly swipe:<br/>30d+ unplayed off TeraBox] --> TB
+    end
+
+    SLSKD -->|downloads| D
+    D --> Media
+    D -.->|stable set| SL
+
+    classDef bitchord fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef proxy fill:#f1f5f9,stroke:#64748b,color:#1e293b
+    classDef addon fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef slskd fill:#ede9fe,stroke:#7c3aed,color:#4c1d95
+    classDef p2p fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    classDef search fill:#ecfdf5,stroke:#059669,color:#064e3b
+    classDef stream fill:#eff6ff,stroke:#0284c7,color:#0c4a6e
+    classDef media fill:#f0fdfa,stroke:#0d9488,color:#134e4a
+    classDef store fill:#fefce8,stroke:#ca8a04,color:#713f12
+    classDef cdn fill:#fce7f3,stroke:#db2777,color:#831843
+    classDef miss fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    class BC bitchord
+    class Caddy proxy
+    class Addon addon
+    class SLSKD slskd
+    class SL p2p
+    class S1,S2,S3,S4 search
+    class T1,T2,T3,T5 stream
+    class T4 miss
+    class M1,M2,M3 media
+    class M4 miss
+    class D,TB store
+    class CF cdn
+    class P1,G1,U1 store
+    style Search fill:#f0fdf4,stroke:#059669
+    style Stream fill:#eff6ff,stroke:#0284c7
+    style Media fill:#f0fdfa,stroke:#0d9488
+    style Upkeep fill:#fefce8,stroke:#ca8a04
 ```
 
 **One play, end to end:**
