@@ -165,8 +165,18 @@ async function handleStream(id, res) {
     res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "15" });
     return res.end(JSON.stringify({ error: "busy, retry shortly" }));
   }
-  activeStreams++;
   const t0 = Date.now();
+  // Cache tier: a track whose complete file already lives on disk (stable
+  // shared/ or the TeraBox archive) never touches the peer network — this is
+  // what makes repeat plays "stream from TeraBox" directly.
+  const cached = serveFromDiskIfComplete(id);
+  if (cached) {
+    const body = buildStreamBody(cached.cid, cached.filename);
+    streamCache.set(id, { at: Date.now(), body });
+    console.error(`stream ok (disk:${cached.root}): ms=${Date.now() - t0}`);
+    return json(res, 200, body);
+  }
+  activeStreams++;
   try {
     const ids = findSiblings(id);
     await Promise.all(ids.map((cid) => {
@@ -184,38 +194,16 @@ async function handleStream(id, res) {
     }));
     const won = await waitForFirstComplete(ids);
     if (!won) return json(res, 404, { error: "peer unavailable or queued — try next source" });
-    const meta0 = findCachedMeta(won.id);
-    const meta = describeFile(won.filename);
-    // Bitrate the player can rank: decoded from file when known, else derived
-    // from the search-reported size+duration (slskd never reports bitrate).
-    const bps = meta.bitrate
-      ?? (meta0?.size && meta0?.duration ? Math.round((meta0.size * 8) / meta0.duration) : undefined);
-    const mediaBase = config.ADDON_TOKEN
-      ? `${config.PUBLIC_BASE_URL}/${config.ADDON_TOKEN}/media`
-      : `${config.PUBLIC_BASE_URL}/media`;
-    const body = {
-      url: `${mediaBase}/${encodeURIComponent(id)}`,
-      format: meta.format,
-      quality: meta.lossless
-        ? (meta0?.bitDepth && meta0.bitDepth > 16
-          ? `Lossless · Hi-Res ${meta0.bitDepth}-bit${meta0.sampleRate ? ` / ${(meta0.sampleRate / 1000).toFixed(1)} kHz` : ""} (SoulSeek)`
-          : "Lossless (SoulSeek)")
-        : bps ? `SoulSeek · ~${Math.round(bps / 1000)} kbps` : "SoulSeek",
-      codec: meta.codec,
-      container: meta.container,
-      manifest: "none",
-      encrypted: false,
-      ...(bps ? { bitrate: bps } : {}),
-      ...(meta0?.sampleRate ? { sampleRate: meta0.sampleRate } : {}),
-      ...(meta0?.bitDepth ? { bitDepth: meta0.bitDepth } : {}),
-    };
+    const body = buildStreamBody(won.id, won.filename);
     streamCache.set(id, { at: Date.now(), body });
     console.error(`stream ok: ms=${Date.now() - t0}`);
     json(res, 200, body);
     // Instant TeraBox archive: mirror completed downloads straight away so
     // the cache tier doesn't wait on the hourly gate. Fire-and-forget —
     // playback already answered. Skips files already under a stable root.
-    if (config.TERABOX_DIR && teraboxEnabled()) archiveToTerabox(won.diskPath).catch(() => {});
+    if (config.TERABOX_DIR && teraboxEnabled()) {
+      archiveToTerabox(won.diskPath).catch((e) => console.error("terabox archive failed:", e.message));
+    }
   } catch (err) {
     console.error("stream failed:", err.message);
     json(res, 404, { error: "not in this addon" });
@@ -310,6 +298,74 @@ function findCachedMeta(id) {
     }
   }
   return {};
+}
+
+// Identical response contract to a freshly downloaded track, but built from
+// a file already on disk (same codec/truthful-quality logic — no overstating).
+function buildStreamBody(cid, filename) {
+  const meta0 = findCachedMeta(cid);
+  const meta = describeFile(filename);
+  // Bitrate the player can rank: decoded from file when known, else derived
+  // from the search-reported size+duration (slskd never reports bitrate).
+  const bps = meta.bitrate
+    ?? (meta0?.size && meta0?.duration ? Math.round((meta0.size * 8) / meta0.duration) : undefined);
+  const mediaBase = config.ADDON_TOKEN
+    ? `${config.PUBLIC_BASE_URL}/${config.ADDON_TOKEN}/media`
+    : `${config.PUBLIC_BASE_URL}/media`;
+  return {
+    url: `${mediaBase}/${encodeURIComponent(cid)}`,
+    format: meta.format,
+    quality: meta.lossless
+      ? (meta0?.bitDepth && meta0.bitDepth > 16
+        ? `Lossless · Hi-Res ${meta0.bitDepth}-bit${meta0.sampleRate ? ` / ${(meta0.sampleRate / 1000).toFixed(1)} kHz` : ""} (SoulSeek)`
+        : "Lossless (SoulSeek)")
+      : bps ? `SoulSeek · ~${Math.round(bps / 1000)} kbps` : "SoulSeek",
+    codec: meta.codec,
+    container: meta.container,
+    manifest: "none",
+    encrypted: false,
+    ...(bps ? { bitrate: bps } : {}),
+    ...(meta0?.sampleRate ? { sampleRate: meta0.sampleRate } : {}),
+    ...(meta0?.bitDepth ? { bitDepth: meta0.bitDepth } : {}),
+  };
+}
+
+// Cache-tier fast path: complete files under STABLE roots (shared/, TeraBox
+// archive) exist there only after the file was fully downloaded, so serving
+// one skips the peer transfer entirely — repeat plays answer from disk with
+// zero slskd work. incomplete/ files are deliberately never eligible: they
+// are partial by definition. No match found -> callers fall through to slskd.
+function serveFromDiskIfComplete(id) {
+  const stable = [];
+  if (config.SHARED_DIR) stable.push([config.SHARED_DIR, "shared"]);
+  if (config.TERABOX_DIR && teraboxEnabled()) stable.push([config.TERABOX_DIR, "terabox"]);
+  if (!stable.length) return null;
+  for (const cid of findSiblings(id)) {
+    let filename;
+    try {
+      filename = decodeId(cid).filename;
+    } catch {
+      continue;
+    }
+    const base = filename.split(/[\\/]/).pop();
+    for (const [root, label] of stable) {
+      const hit = walk(root, base);
+      if (hit) return { cid, filename, root: label };
+    }
+    // A local completed copy also qualifies when the search-reported size
+    // confirms the file is whole (in-progress files live in incomplete/,
+    // never under DOWNLOAD_DIR).
+    const size = findCachedMeta(cid).size;
+    if (size) {
+      try {
+        const hit = walk(config.DOWNLOAD_DIR, base);
+        if (hit && fs.statSync(hit).size >= size) {
+          return { cid, filename, root: "downloads" };
+        }
+      } catch { /* vanished mid-check */ }
+    }
+  }
+  return null;
 }
 
 // Mirror a completed download into the TeraBox cache mount (if configured).
